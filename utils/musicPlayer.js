@@ -21,51 +21,36 @@ class MusicPlayer {
       console.log('Creating audio stream for:', song.title);
       console.log('Using URL:', song.url);
       
-      // Create stream with faster timeout handling
       const stream = await this.createAudioStream(song.url);
       
       const resource = createAudioResource(stream, {
         inputType: 'arbitrary',
-        inlineVolume: false,
-        metadata: {
-          title: song.title,
-          url: song.url
-        }
+        inlineVolume: false
       });
       
       serverQueue.player.play(resource);
       
-      // Set up timeout for playing status
-      const playTimeout = setTimeout(() => {
-        console.log('⚠️ Play timeout - forcing next song');
-        serverQueue.songs.shift();
-        this.playSong(guild, serverQueue.songs[0]);
-      }, 30000); // 30 second timeout
-
       serverQueue.player.once(AudioPlayerStatus.Playing, () => {
-        clearTimeout(playTimeout);
         console.log('✅ Now playing:', song.title);
         serverQueue.textChannel.send(`🎵 **Now playing:** ${song.title}\n*Requested by: ${song.requester}*`);
       });
 
       serverQueue.player.once(AudioPlayerStatus.Idle, () => {
-        clearTimeout(playTimeout);
         console.log('Song finished, playing next...');
         serverQueue.songs.shift();
         this.playSong(guild, serverQueue.songs[0]);
       });
 
       serverQueue.player.on('error', error => {
-        clearTimeout(playTimeout);
         console.error('Player error:', error);
-        serverQueue.textChannel.send('❌ Audio player error. Skipping to next song...');
+        serverQueue.textChannel.send('❌ Error playing song. Skipping...');
         serverQueue.songs.shift();
         this.playSong(guild, serverQueue.songs[0]);
       });
 
     } catch (error) {
       console.error('Error creating stream:', error);
-      serverQueue.textChannel.send('❌ Stream creation failed. Trying next song...');
+      serverQueue.textChannel.send('❌ Failed to play this song. Skipping...');
       serverQueue.songs.shift();
       this.playSong(guild, serverQueue.songs[0]);
     }
@@ -73,12 +58,21 @@ class MusicPlayer {
 
   async createAudioStream(url) {
     return new Promise((resolve, reject) => {
-      const executables = ['yt-dlp', 'youtube-dl'];
+      // Extended executable paths for Render environment
+      const executables = [
+        'yt-dlp',
+        'youtube-dl',
+        '/opt/render/.python/bin/yt-dlp',
+        '/opt/render/.python/bin/youtube-dl',
+        '/home/render/.local/bin/yt-dlp',
+        '/home/render/.local/bin/youtube-dl'
+      ];
+      
       let executableIndex = 0;
       
       const tryExecutable = () => {
         if (executableIndex >= executables.length) {
-          reject(new Error('All executables failed - hosting platform may not support binaries'));
+          reject(new Error('No working YouTube downloader found'));
           return;
         }
         
@@ -93,7 +87,6 @@ class MusicPlayer {
           '--no-playlist',
           '--quiet',
           '--no-warnings',
-          '--socket-timeout', '10',
           '--output', '-',
           url
         ];
@@ -104,17 +97,9 @@ class MusicPlayer {
 
         const stream = new PassThrough();
         let hasData = false;
-        let resolved = false;
 
         process.stdout.on('data', (chunk) => {
-          if (!hasData) {
-            hasData = true;
-            if (!resolved) {
-              console.log(`✅ ${executable} streaming started`);
-              resolved = true;
-              resolve(stream);
-            }
-          }
+          hasData = true;
           stream.write(chunk);
         });
 
@@ -127,28 +112,31 @@ class MusicPlayer {
         });
 
         process.on('error', (error) => {
-          console.error(`${executable} spawn error:`, error.message);
+          console.error(`${executable} process error:`, error.message);
           executableIndex++;
           tryExecutable();
         });
 
         process.on('close', (code) => {
           if (code !== 0 && !hasData) {
-            console.error(`${executable} exited with code ${code}`);
+            console.error(`${executable} process exited with code ${code}`);
             executableIndex++;
             tryExecutable();
           }
         });
 
-        // Reduced timeout for hosting environments
+        process.stdout.once('data', () => {
+          console.log(`✅ ${executable} started streaming successfully`);
+          resolve(stream);
+        });
+
         setTimeout(() => {
           if (!hasData) {
-            console.log(`${executable} timeout - trying next executable`);
             process.kill();
             executableIndex++;
             tryExecutable();
           }
-        }, 10000); // 10 second timeout instead of 15
+        }, 15000);
       };
       
       tryExecutable();
