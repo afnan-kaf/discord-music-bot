@@ -18,16 +18,40 @@ class MusicPlayer {
 
     try {
       console.log('Creating audio stream for:', song.title);
+      console.log('Using URL:', song.url);
       
-      // Use youtube-dl-exec for streaming
+      // Create stream with verbose error handling
       const stream = youtubedl(song.url, {
         output: '-',
-        format: 'bestaudio',
+        format: 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
         extractAudio: true,
         audioFormat: 'opus',
         audioQuality: 0,
         noPlaylist: true,
-        quiet: true
+        quiet: false, // Enable output for debugging
+        verbose: true // Enable verbose output
+      });
+      
+      // Monitor stream for data
+      let hasStartedStreaming = false;
+      
+      stream.on('data', (chunk) => {
+        if (!hasStartedStreaming) {
+          console.log('✅ Audio stream started successfully');
+          hasStartedStreaming = true;
+        }
+      });
+
+      stream.on('error', (error) => {
+        console.error('❌ Stream error:', error);
+        serverQueue.textChannel.send('❌ Failed to create audio stream. Check if youtube-dl is installed.');
+      });
+
+      stream.on('end', () => {
+        if (!hasStartedStreaming) {
+          console.log('❌ Stream ended without data - youtube-dl may not be working');
+          serverQueue.textChannel.send('❌ Audio stream failed - please check youtube-dl installation.');
+        }
       });
       
       const resource = createAudioResource(stream, {
@@ -50,14 +74,14 @@ class MusicPlayer {
 
       serverQueue.player.on('error', error => {
         console.error('Player error:', error);
-        serverQueue.textChannel.send('❌ Error playing song. Skipping...');
+        serverQueue.textChannel.send('❌ Audio player error. Skipping to next song...');
         serverQueue.songs.shift();
         this.playSong(guild, serverQueue.songs[0]);
       });
 
     } catch (error) {
       console.error('Error creating stream:', error);
-      serverQueue.textChannel.send('❌ Failed to play this song. Skipping...');
+      serverQueue.textChannel.send('❌ Failed to play this song. Ensure youtube-dl is installed and accessible.');
       serverQueue.songs.shift();
       this.playSong(guild, serverQueue.songs[0]);
     }

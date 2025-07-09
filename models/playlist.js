@@ -17,6 +17,7 @@ const playlistSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+// Compound index for efficient queries
 playlistSchema.index({ userId: 1, guildId: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('Playlist', playlistSchema);
