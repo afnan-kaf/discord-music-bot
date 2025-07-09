@@ -1,29 +1,43 @@
 {
   "name": "discord-music-bot",
   "version": "1.0.0",
-  "description": "FTR Music Bot with YouTube integration",
+  "description": "FTR Music Bot with YouTube integration and playlist management",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
     "build": "npm install",
-    "postinstall": "python3 -m pip install yt-dlp youtube-dl || pip install yt-dlp youtube-dl || echo 'Binary installation completed'"
+    "postinstall": "python3 -m pip install yt-dlp || pip install yt-dlp || pip install youtube-dl || echo 'youtube-dl installation skipped'"
   },
+  "keywords": [
+    "discord",
+    "bot",
+    "music",
+    "youtube",
+    "playlist"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
     "discord.js": "^14.14.1",
     "@discordjs/voice": "^0.18.0",
     "@discordjs/opus": "^0.9.0",
-    "youtube-dl-exec": "^2.4.13",
+    "ytdl-core": "^4.11.5",
     "youtube-search-api": "^1.2.0",
     "mongoose": "^8.0.3",
     "googleapis": "^129.0.0",
     "dotenv": "^16.3.1",
-    "sodium-native": "^4.0.4"
+    "sodium-native": "^4.0.4",
+    "express": "^4.18.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/afnan-kaf/discord-music-bot.git"
   }
 }

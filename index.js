@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const mongoose = require('mongoose');
+const musicPlayer = require('./utils/musicPlayer');
 const musicCommands = require('./commands/music');
 const playlistCommands = require('./commands/playlist');
 const youtubeCommands = require('./commands/youtube');
@@ -23,6 +24,7 @@ mongoose.connect(process.env.MONGODB_URI).then(() => {
 
 client.once('ready', () => {
   console.log(`🤖 ${client.user.tag} is online!`);
+  client.user.setActivity('🎵 FTR Music from YouTube', { type: 'LISTENING' });
 });
 
 client.on('messageCreate', async message => {
@@ -83,7 +85,7 @@ client.on('messageCreate', async message => {
     }
   } catch (error) {
     console.error('Command error:', error);
-    message.reply('❌ An error occurred.');
+    message.reply('❌ An error occurred while executing the command.');
   }
 });
 
@@ -94,17 +96,77 @@ async function showHelp(message) {
     .addFields(
       { 
         name: '🎶 Music Commands', 
-        value: `\`ftr.play <song/url>\` - Play music\n\`ftr.pause\` - Pause\n\`ftr.resume\` - Resume\n\`ftr.skip\` - Skip\n\`ftr.queue\` - Show queue\n\`ftr.stop\` - Stop`, 
+        value: '`ftr.play <song/url>` or `ftr.p` - Play music\n`ftr.pause` - Pause current song\n`ftr.resume` - Resume paused song\n`ftr.skip` - Skip current song\n`ftr.queue` or `ftr.q` - Show current queue\n`ftr.stop` - Stop music and clear queue', 
         inline: false 
       },
       { 
         name: '📝 Playlist Commands', 
-        value: `\`ftr.create-playlist <name>\` - Create playlist\n\`ftr.my-playlists\` - Show playlists\n\`ftr.add-song <playlist> <song>\` - Add song\n\`ftr.play-playlist <name>\` - Play playlist`, 
+        value: '`ftr.create-playlist <name>` or `ftr.cp` - Create playlist\n`ftr.delete-playlist <name>` or `ftr.dp` - Delete playlist\n`ftr.add-song <playlist> <song>` or `ftr.as` - Add song to playlist\n`ftr.remove-song <playlist> <index>` or `ftr.rs` - Remove song from playlist\n`ftr.my-playlists` or `ftr.mp` - Show your playlists\n`ftr.show-playlist <name>` or `ftr.sp` - Show playlist songs\n`ftr.play-playlist <name>` or `ftr.pp` - Play entire playlist\n`ftr.rename-playlist <old> <new>` or `ftr.rp` - Rename playlist', 
+        inline: false 
+      },
+      { 
+        name: '📺 YouTube Integration', 
+        value: '`ftr.auth-youtube` or `ftr.ay` - Authenticate with YouTube\n`ftr.authcode <code>` - Complete authentication\n`ftr.import-playlist` or `ftr.ip` - Import YouTube playlists', 
         inline: false 
       }
-    );
+    )
+    .setFooter({ text: 'FTR Music Bot - Powered by yt-dlp' });
 
   await message.reply({ embeds: [embed] });
 }
+
+// Handle voice connection errors and auto-disconnect
+client.on('voiceStateUpdate', (oldState, newState) => {
+  if (oldState.member.user.bot) return;
+  
+  const serverQueue = musicPlayer.getQueue(oldState.guild.id);
+  if (serverQueue && oldState.channelId === serverQueue.voiceChannel.id) {
+    if (newState.channelId !== oldState.channelId) {
+      // User left the voice channel
+      const membersInChannel = oldState.channel.members.filter(member => !member.user.bot);
+      if (membersInChannel.size === 0) {
+        // No users left in voice channel, disconnect bot after 5 minutes
+        setTimeout(() => {
+          const currentQueue = musicPlayer.getQueue(oldState.guild.id);
+          if (currentQueue) {
+            musicPlayer.deleteQueue(oldState.guild.id);
+            serverQueue.textChannel.send('🔇 Left voice channel due to inactivity.');
+          }
+        }, 300000); // 5 minutes delay
+      }
+    }
+  }
+});
+
+// Error handling
+process.on('unhandledRejection', error => {
+  console.error('Unhandled promise rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+// HTTP server for deployment platforms that require it
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('FTR Music Bot is running!');
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    bot: client.user ? client.user.tag : 'offline',
+    uptime: process.uptime(),
+    guilds: client.guilds.cache.size
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 HTTP server running on port ${PORT}`);
+});
 
 client.login(process.env.DISCORD_TOKEN);
