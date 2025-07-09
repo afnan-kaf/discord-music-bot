@@ -1,6 +1,5 @@
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const { spawn } = require('child_process');
-const { PassThrough } = require('stream');
+const ytdl = require('ytdl-core');
 
 class MusicPlayer {
   constructor() {
@@ -19,13 +18,23 @@ class MusicPlayer {
 
     try {
       console.log('Creating audio stream for:', song.title);
-      console.log('Using URL:', song.url);
       
-      const stream = await this.createAudioStream(song.url);
+      const stream = ytdl(song.url, {
+        filter: 'audioonly',
+        quality: 'lowestaudio',
+        requestOptions: {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive'
+          }
+        }
+      });
       
       const resource = createAudioResource(stream, {
-        inputType: 'arbitrary',
-        inlineVolume: false
+        inputType: 'arbitrary'
       });
       
       serverQueue.player.play(resource);
@@ -48,6 +57,13 @@ class MusicPlayer {
         this.playSong(guild, serverQueue.songs[0]);
       });
 
+      stream.on('error', (error) => {
+        console.error('Stream error:', error);
+        serverQueue.textChannel.send('❌ YouTube stream error. Skipping...');
+        serverQueue.songs.shift();
+        this.playSong(guild, serverQueue.songs[0]);
+      });
+
     } catch (error) {
       console.error('Error creating stream:', error);
       serverQueue.textChannel.send('❌ Failed to play this song. Skipping...');
@@ -56,16 +72,19 @@ class MusicPlayer {
     }
   }
 
+  // ... rest of methods remain the same
   async createAudioStream(url) {
     return new Promise((resolve, reject) => {
-      // Extended executable paths for Render environment
+      // Enhanced binary paths for Render
       const executables = [
         'yt-dlp',
         'youtube-dl',
+        '/usr/local/bin/yt-dlp',
+        '/usr/local/bin/youtube-dl',
+        '/usr/bin/yt-dlp',
+        '/usr/bin/youtube-dl',
         '/opt/render/.python/bin/yt-dlp',
-        '/opt/render/.python/bin/youtube-dl',
-        '/home/render/.local/bin/yt-dlp',
-        '/home/render/.local/bin/youtube-dl'
+        '/opt/render/.python/bin/youtube-dl'
       ];
       
       let executableIndex = 0;
@@ -79,17 +98,37 @@ class MusicPlayer {
         const executable = executables[executableIndex];
         console.log(`Trying ${executable}...`);
         
-        const args = [
-          '--extract-audio',
-          '--audio-format', 'opus',
-          '--audio-quality', '0',
-          '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
-          '--no-playlist',
-          '--quiet',
-          '--no-warnings',
-          '--output', '-',
-          url
-        ];
+        // Different arguments for different tools
+        let args;
+        if (executable.includes('yt-dlp')) {
+          args = [
+            '--extract-audio',
+            '--audio-format', 'opus',
+            '--audio-quality', '0',
+            '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
+            '--no-playlist',
+            '--quiet',
+            '--no-warnings',
+            '--no-check-certificates',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '--output', '-',
+            url
+          ];
+        } else {
+          // youtube-dl specific arguments
+          args = [
+            '--extract-audio',
+            '--audio-format', 'best',
+            '--audio-quality', '0',
+            '--format', 'bestaudio',
+            '--no-playlist',
+            '--quiet',
+            '--no-warnings',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '--output', '-.%(ext)s',
+            url
+          ];
+        }
 
         const process = spawn(executable, args, {
           stdio: ['ignore', 'pipe', 'pipe']
@@ -108,7 +147,13 @@ class MusicPlayer {
         });
 
         process.stderr.on('data', (data) => {
-          console.error(`${executable} stderr:`, data.toString());
+          const errorMsg = data.toString();
+          console.error(`${executable} stderr:`, errorMsg);
+          
+          // Check for specific YouTube bot detection
+          if (errorMsg.includes('Sign in to confirm')) {
+            console.log('YouTube bot detection triggered, trying next method...');
+          }
         });
 
         process.on('error', (error) => {
@@ -118,25 +163,27 @@ class MusicPlayer {
         });
 
         process.on('close', (code) => {
+          console.log(`${executable} process exited with code ${code}`);
           if (code !== 0 && !hasData) {
-            console.error(`${executable} process exited with code ${code}`);
             executableIndex++;
             tryExecutable();
           }
         });
 
+        // Resolve when we start receiving data
         process.stdout.once('data', () => {
           console.log(`✅ ${executable} started streaming successfully`);
           resolve(stream);
         });
 
+        // Timeout after 20 seconds
         setTimeout(() => {
           if (!hasData) {
             process.kill();
             executableIndex++;
             tryExecutable();
           }
-        }, 15000);
+        }, 20000);
       };
       
       tryExecutable();
