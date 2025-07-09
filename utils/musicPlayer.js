@@ -183,4 +183,5 @@ class MusicPlayer {
   }
 }
 
+// Export a single instance of the MusicPlayer class
 module.exports = new MusicPlayer();
