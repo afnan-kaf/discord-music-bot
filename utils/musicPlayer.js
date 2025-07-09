@@ -1,5 +1,6 @@
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const youtubedl = require('youtube-dl-exec');
+const { spawn } = require('child_process');
+const { PassThrough } = require('stream');
 
 class MusicPlayer {
   constructor() {
@@ -20,39 +21,8 @@ class MusicPlayer {
       console.log('Creating audio stream for:', song.title);
       console.log('Using URL:', song.url);
       
-      // Create stream with verbose error handling
-      const stream = youtubedl(song.url, {
-        output: '-',
-        format: 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
-        extractAudio: true,
-        audioFormat: 'opus',
-        audioQuality: 0,
-        noPlaylist: true,
-        quiet: false, // Enable output for debugging
-        verbose: true // Enable verbose output
-      });
-      
-      // Monitor stream for data
-      let hasStartedStreaming = false;
-      
-      stream.on('data', (chunk) => {
-        if (!hasStartedStreaming) {
-          console.log('✅ Audio stream started successfully');
-          hasStartedStreaming = true;
-        }
-      });
-
-      stream.on('error', (error) => {
-        console.error('❌ Stream error:', error);
-        serverQueue.textChannel.send('❌ Failed to create audio stream. Check if youtube-dl is installed.');
-      });
-
-      stream.on('end', () => {
-        if (!hasStartedStreaming) {
-          console.log('❌ Stream ended without data - youtube-dl may not be working');
-          serverQueue.textChannel.send('❌ Audio stream failed - please check youtube-dl installation.');
-        }
-      });
+      // Create proper stream using spawn instead of youtube-dl-exec directly
+      const stream = await this.createAudioStream(song.url);
       
       const resource = createAudioResource(stream, {
         inputType: 'arbitrary',
@@ -74,17 +44,98 @@ class MusicPlayer {
 
       serverQueue.player.on('error', error => {
         console.error('Player error:', error);
-        serverQueue.textChannel.send('❌ Audio player error. Skipping to next song...');
+        serverQueue.textChannel.send('❌ Error playing song. Skipping...');
         serverQueue.songs.shift();
         this.playSong(guild, serverQueue.songs[0]);
       });
 
     } catch (error) {
       console.error('Error creating stream:', error);
-      serverQueue.textChannel.send('❌ Failed to play this song. Ensure youtube-dl is installed and accessible.');
+      serverQueue.textChannel.send('❌ Failed to play this song. Trying next...');
       serverQueue.songs.shift();
       this.playSong(guild, serverQueue.songs[0]);
     }
+  }
+
+  async createAudioStream(url) {
+    return new Promise((resolve, reject) => {
+      // Try yt-dlp first, then youtube-dl as fallback
+      const executables = ['yt-dlp', 'youtube-dl'];
+      let executableIndex = 0;
+      
+      const tryExecutable = () => {
+        if (executableIndex >= executables.length) {
+          reject(new Error('Neither yt-dlp nor youtube-dl is available'));
+          return;
+        }
+        
+        const executable = executables[executableIndex];
+        console.log(`Trying ${executable}...`);
+        
+        const args = [
+          '--extract-audio',
+          '--audio-format', 'opus',
+          '--audio-quality', '0',
+          '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
+          '--no-playlist',
+          '--quiet',
+          '--no-warnings',
+          '--output', '-',
+          url
+        ];
+
+        const process = spawn(executable, args, {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        const stream = new PassThrough();
+        let hasData = false;
+
+        process.stdout.on('data', (chunk) => {
+          hasData = true;
+          stream.write(chunk);
+        });
+
+        process.stdout.on('end', () => {
+          stream.end();
+        });
+
+        process.stderr.on('data', (data) => {
+          console.error(`${executable} stderr:`, data.toString());
+        });
+
+        process.on('error', (error) => {
+          console.error(`${executable} process error:`, error.message);
+          executableIndex++;
+          tryExecutable();
+        });
+
+        process.on('close', (code) => {
+          if (code !== 0 && !hasData) {
+            console.error(`${executable} process exited with code ${code}`);
+            executableIndex++;
+            tryExecutable();
+          }
+        });
+
+        // Resolve when we start receiving data
+        process.stdout.once('data', () => {
+          console.log(`✅ ${executable} started streaming successfully`);
+          resolve(stream);
+        });
+
+        // Timeout after 15 seconds
+        setTimeout(() => {
+          if (!hasData) {
+            process.kill();
+            executableIndex++;
+            tryExecutable();
+          }
+        }, 15000);
+      };
+      
+      tryExecutable();
+    });
   }
 
   pauseSong(guildId) {
