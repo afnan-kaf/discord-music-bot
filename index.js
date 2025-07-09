@@ -110,29 +110,27 @@ async function showHelp(message) {
         inline: false 
       }
     )
-    .setFooter({ text: 'FTR Music Bot - Powered by yt-dlp' });
+    .setFooter({ text: 'FTR Music Bot - Enhanced with YouTube Bypassing' });
 
   await message.reply({ embeds: [embed] });
 }
 
-// Handle voice connection errors and auto-disconnect
+// Voice connection management
 client.on('voiceStateUpdate', (oldState, newState) => {
   if (oldState.member.user.bot) return;
   
   const serverQueue = musicPlayer.getQueue(oldState.guild.id);
   if (serverQueue && oldState.channelId === serverQueue.voiceChannel.id) {
     if (newState.channelId !== oldState.channelId) {
-      // User left the voice channel
       const membersInChannel = oldState.channel.members.filter(member => !member.user.bot);
       if (membersInChannel.size === 0) {
-        // No users left in voice channel, disconnect bot after 5 minutes
         setTimeout(() => {
           const currentQueue = musicPlayer.getQueue(oldState.guild.id);
           if (currentQueue) {
             musicPlayer.deleteQueue(oldState.guild.id);
             serverQueue.textChannel.send('🔇 Left voice channel due to inactivity.');
           }
-        }, 300000); // 5 minutes delay
+        }, 300000);
       }
     }
   }
@@ -147,21 +145,28 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });
 
-// HTTP server for deployment platforms that require it
+// HTTP server for Render deployment
 const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-  res.send('FTR Music Bot is running!');
+  res.json({
+    status: 'FTR Music Bot is running!',
+    bot: client.user ? client.user.tag : 'offline',
+    uptime: process.uptime(),
+    guilds: client.guilds.cache.size,
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    bot: client.user ? client.user.tag : 'offline',
-    uptime: process.uptime(),
-    guilds: client.guilds.cache.size
+    bot: client.user ? 'online' : 'offline',
+    queues: musicPlayer.queues.size,
+    memory: process.memoryUsage(),
+    uptime: process.uptime()
   });
 });
 

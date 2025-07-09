@@ -1,53 +1,15 @@
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const ytdl = require('ytdl-core');
+const { spawn } = require('child_process');
 const { PassThrough } = require('stream');
-
-// User-Agent header for better YouTube compatibility
-const UA = {
-  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0'
-};
-
-// Enhanced stream function with retry logic
-function getStream(url, opts) {
-  const pass = new PassThrough();
-  let attempt = 0;
-
-  const makeRequest = async () => {
-    try {
-      attempt += 1;
-      const stream = ytdl(url, { 
-        ...opts, 
-        requestOptions: { headers: UA }, 
-        highWaterMark: 1 << 25 
-      });
-      
-      stream.pipe(pass, { end: false });
-      
-      stream.on('end', () => pass.end());
-      
-      stream.on('error', err => {
-        console.error(`Stream error (attempt ${attempt}):`, err.message);
-        // Retry once when the first URL is dead (410/404/403)
-        if (attempt === 1 && err.statusCode && String(err.statusCode).startsWith('4')) {
-          console.log('Retrying stream with backoff...');
-          setTimeout(makeRequest, 700); // small back-off
-        } else {
-          pass.destroy(err);
-        }
-      });
-    } catch(e) {
-      console.error('Stream creation error:', e);
-      pass.destroy(e);
-    }
-  };
-  
-  makeRequest();
-  return pass;
-}
 
 class MusicPlayer {
   constructor() {
     this.queues = new Map();
+    this.userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ];
   }
 
   async playSong(guild, song) {
@@ -64,16 +26,7 @@ class MusicPlayer {
       console.log('Creating audio stream for:', song.title);
       console.log('Using URL:', song.url);
       
-      // Validate URL before streaming
-      if (!ytdl.validateURL(song.url)) {
-        throw new Error('Invalid YouTube URL');
-      }
-      
-      // Use enhanced stream function with retry logic
-      const stream = getStream(song.url, { 
-        filter: 'audioonly', 
-        quality: 'lowestaudio' 
-      });
+      const stream = await this.createAudioStreamWithRetry(song.url, 3);
       
       const resource = createAudioResource(stream, {
         inputType: 'arbitrary',
@@ -94,16 +47,8 @@ class MusicPlayer {
       });
 
       serverQueue.player.on('error', error => {
-        console.error('Audio player error:', error);
+        console.error('Player error:', error);
         serverQueue.textChannel.send('❌ Audio player error. Skipping to next song...');
-        serverQueue.songs.shift();
-        this.playSong(guild, serverQueue.songs[0]);
-      });
-
-      // Handle stream errors
-      stream.on('error', (error) => {
-        console.error('Enhanced stream error:', error);
-        serverQueue.textChannel.send('❌ Error with audio stream. Skipping to next song...');
         serverQueue.songs.shift();
         this.playSong(guild, serverQueue.songs[0]);
       });
@@ -112,16 +57,14 @@ class MusicPlayer {
       console.error('Error creating stream:', error);
       let errorMessage = '❌ Failed to play this song. ';
       
-      if (error.message.includes('Invalid')) {
-        errorMessage += 'Invalid YouTube URL. ';
-      } else if (error.message.includes('unavailable')) {
-        errorMessage += 'Video is unavailable. ';
-      } else if (error.message.includes('private')) {
-        errorMessage += 'Video is private. ';
-      } else if (error.message.includes('copyright')) {
-        errorMessage += 'Video is blocked due to copyright. ';
+      if (error.message.includes('410')) {
+        errorMessage += 'Video is no longer available (410 error). ';
+      } else if (error.message.includes('timeout')) {
+        errorMessage += 'Connection timeout. ';
+      } else if (error.message.includes('blocked')) {
+        errorMessage += 'Video blocked by YouTube. ';
       } else {
-        errorMessage += 'YouTube streaming error. ';
+        errorMessage += 'Unknown error occurred. ';
       }
       
       errorMessage += 'Skipping to next song...';
@@ -129,6 +72,180 @@ class MusicPlayer {
       serverQueue.songs.shift();
       this.playSong(guild, serverQueue.songs[0]);
     }
+  }
+
+  async createAudioStreamWithRetry(url, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Attempt ${attempt}/${maxRetries} to create audio stream`);
+        return await this.createAudioStream(url, attempt);
+      } catch (error) {
+        console.error(`Attempt ${attempt} failed:`, error.message);
+        
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Wait before retry with exponential backoff
+        await this.delay(Math.pow(2, attempt) * 1000);
+      }
+    }
+  }
+
+  async createAudioStream(url, attempt = 1) {
+    return new Promise((resolve, reject) => {
+      const executables = [
+        'yt-dlp',
+        'youtube-dl',
+        '/opt/render/.python/bin/yt-dlp',
+        '/opt/render/.python/bin/youtube-dl',
+        '/home/render/.local/bin/yt-dlp',
+        '/home/render/.local/bin/youtube-dl',
+        'python3 -m yt_dlp',
+        'python3 -m youtube_dl'
+      ];
+      
+      let executableIndex = 0;
+      
+      const tryExecutable = () => {
+        if (executableIndex >= executables.length) {
+          reject(new Error('No working YouTube downloader found'));
+          return;
+        }
+        
+        const executable = executables[executableIndex];
+        console.log(`Trying ${executable} (attempt ${attempt})...`);
+        
+        const randomUserAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
+        const isPythonModule = executable.includes('python3 -m');
+        
+        let command, args;
+        
+        if (isPythonModule) {
+          command = 'python3';
+          const module = executable.includes('yt_dlp') ? 'yt_dlp' : 'youtube_dl';
+          args = [
+            '-m', module,
+            '--user-agent', randomUserAgent,
+            '--referer', 'https://www.youtube.com/',
+            '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            '--add-header', 'Accept-Language:en-US,en;q=0.5',
+            '--add-header', 'Accept-Encoding:gzip, deflate',
+            '--add-header', 'Connection:keep-alive',
+            '--add-header', 'Upgrade-Insecure-Requests:1',
+            '--extract-audio',
+            '--audio-format', 'opus',
+            '--audio-quality', '0',
+            '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+            '--no-playlist',
+            '--no-warnings',
+            '--ignore-errors',
+            '--no-check-certificate',
+            '--prefer-insecure',
+            '--socket-timeout', '30',
+            '--retries', '3',
+            '--output', '-',
+            url
+          ];
+        } else {
+          command = executable;
+          args = [
+            '--user-agent', randomUserAgent,
+            '--referer', 'https://www.youtube.com/',
+            '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            '--add-header', 'Accept-Language:en-US,en;q=0.5',
+            '--add-header', 'Accept-Encoding:gzip, deflate',
+            '--add-header', 'Connection:keep-alive',
+            '--add-header', 'Upgrade-Insecure-Requests:1',
+            '--extract-audio',
+            '--audio-format', 'opus',
+            '--audio-quality', '0',
+            '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+            '--no-playlist',
+            '--no-warnings',
+            '--ignore-errors',
+            '--no-check-certificate',
+            '--prefer-insecure',
+            '--socket-timeout', '30',
+            '--retries', '3',
+            '--output', '-',
+            url
+          ];
+        }
+
+        const process = spawn(command, args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 45000 // 45 second timeout
+        });
+
+        const stream = new PassThrough();
+        let hasData = false;
+        let resolved = false;
+
+        process.stdout.on('data', (chunk) => {
+          if (!resolved) {
+            console.log(`✅ ${executable} started streaming successfully`);
+            resolved = true;
+            resolve(stream);
+          }
+          hasData = true;
+          stream.write(chunk);
+        });
+
+        process.stdout.on('end', () => {
+          stream.end();
+        });
+
+        process.stderr.on('data', (data) => {
+          const errorStr = data.toString();
+          console.error(`${executable} stderr:`, errorStr);
+          
+          // Check for specific YouTube errors
+          if (errorStr.includes('410') || errorStr.includes('Gone')) {
+            if (!resolved) {
+              resolved = true;
+              reject(new Error('Video returned 410 Gone - video no longer available'));
+            }
+          } else if (errorStr.includes('blocked') || errorStr.includes('403')) {
+            if (!resolved) {
+              resolved = true;
+              reject(new Error('Video blocked by YouTube (403 Forbidden)'));
+            }
+          }
+        });
+
+        process.on('error', (error) => {
+          console.error(`${executable} spawn error:`, error.message);
+          if (!resolved) {
+            executableIndex++;
+            tryExecutable();
+          }
+        });
+
+        process.on('close', (code) => {
+          if (code !== 0 && !hasData && !resolved) {
+            console.error(`${executable} exited with code ${code}`);
+            executableIndex++;
+            tryExecutable();
+          }
+        });
+
+        // Extended timeout for hosting environments
+        setTimeout(() => {
+          if (!resolved) {
+            process.kill('SIGKILL');
+            executableIndex++;
+            tryExecutable();
+          }
+        }, 40000);
+      };
+      
+      tryExecutable();
+    });
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   pauseSong(guildId) {
@@ -169,34 +286,10 @@ class MusicPlayer {
   deleteQueue(guildId) {
     const serverQueue = this.queues.get(guildId);
     if (serverQueue) {
-      if (serverQueue.player) {
-        serverQueue.player.stop();
-      }
-      if (serverQueue.voiceConnection) {
-        serverQueue.voiceConnection.destroy();
-      }
+      serverQueue.player?.stop();
+      serverQueue.voiceConnection?.destroy();
     }
     this.queues.delete(guildId);
-  }
-
-  // Additional utility methods
-  getQueueLength(guildId) {
-    const serverQueue = this.queues.get(guildId);
-    return serverQueue ? serverQueue.songs.length : 0;
-  }
-
-  getCurrentSong(guildId) {
-    const serverQueue = this.queues.get(guildId);
-    return serverQueue?.songs[0] || null;
-  }
-
-  clearQueue(guildId) {
-    const serverQueue = this.queues.get(guildId);
-    if (serverQueue) {
-      serverQueue.songs = [];
-      return true;
-    }
-    return false;
   }
 }
 
