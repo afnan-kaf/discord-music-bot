@@ -7,7 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "build": "npm install",
-    "postinstall": "python3 -m pip install --user yt-dlp youtube-dl || pip3 install --user yt-dlp youtube-dl || echo 'Binary installation may have failed'"
+    "postinstall": "python3 -m pip install yt-dlp youtube-dl || pip3 install yt-dlp youtube-dl || pip install yt-dlp youtube-dl || echo 'Binary installation may have failed'"
   },
   "keywords": [
     "discord",
@@ -19,6 +19,7 @@
   "author": "Your Name",
   "license": "MIT",
   "dependencies": {
+    "express": "^4.18.2",
     "discord.js": "^14.14.1",
     "@discordjs/voice": "^0.18.0",
     "@discordjs/opus": "^0.9.0",
