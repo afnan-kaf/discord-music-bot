@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "postinstall": "python3 -m pip install --user yt-dlp youtube-dl || pip install --user yt-dlp youtube-dl || echo 'Binary installation completed'"
+    "postinstall": "python3 -m pip install yt-dlp youtube-dl || pip install yt-dlp youtube-dl || echo 'Binary installation completed'"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
@@ -24,3 +24,4 @@
     "node": "18.x"
   }
 }
+*
