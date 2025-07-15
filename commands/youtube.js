@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const { google } = require('googleapis');
 const Playlist = require('../models/Playlist');
-const ytdl = require('ytdl-core');
+const youtubedl = require('youtube-dl-exec');
 
 const youtube = google.youtube('v3');
 const OAuth2 = google.auth.OAuth2;
@@ -27,7 +27,6 @@ async function authenticateYouTube(message) {
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: scopes,
-    // Add state parameter for security
     state: message.author.id
   });
 
@@ -54,7 +53,6 @@ async function handleAuthCode(message, args) {
   try {
     const { tokens } = await oauth2Client.getToken(code);
     
-    // Store tokens securely
     userTokens.set(message.author.id, {
       ...tokens,
       expiry_date: Date.now() + (tokens.expires_in * 1000)
@@ -76,7 +74,6 @@ async function refreshTokenIfNeeded(userId) {
   const userToken = userTokens.get(userId);
   if (!userToken) return false;
 
-  // Check if token will expire in next 5 minutes
   if (userToken.expiry_date && userToken.expiry_date - Date.now() < 300000) {
     try {
       oauth2Client.setCredentials(userToken);
@@ -100,7 +97,6 @@ async function importPlaylist(message) {
     return message.reply('❌ Please authenticate with YouTube first using `ftm.auth-youtube`');
   }
 
-  // Refresh token if needed
   if (!await refreshTokenIfNeeded(message.author.id)) {
     return message.reply('❌ Authentication expired. Please re-authenticate with `ftm.auth-youtube`');
   }
@@ -108,7 +104,6 @@ async function importPlaylist(message) {
   oauth2Client.setCredentials(userTokens.get(message.author.id));
 
   try {
-    // Rate limiting for YouTube API
     const now = Date.now();
     if (now - lastYouTubeApiCall < YOUTUBE_API_DELAY) {
       await new Promise(resolve => setTimeout(resolve, YOUTUBE_API_DELAY));
@@ -145,7 +140,6 @@ async function importPlaylist(message) {
 
     await message.reply({ embeds: [embed] });
 
-    // Set up message collector for user response
     const filter = (response) => {
       return response.author.id === message.author.id &&
         !isNaN(response.content) &&
@@ -188,7 +182,6 @@ async function importYouTubePlaylist(message, youtubePlaylist) {
   const importMessage = await message.reply('🔄 Importing playlist... This may take a moment.');
 
   try {
-    // Rate limiting for YouTube API
     const now = Date.now();
     if (now - lastYouTubeApiCall < YOUTUBE_API_DELAY) {
       await new Promise(resolve => setTimeout(resolve, YOUTUBE_API_DELAY));
@@ -209,36 +202,30 @@ async function importYouTubePlaylist(message, youtubePlaylist) {
     const songs = [];
     let processedCount = 0;
 
-    // Process videos with validation
     for (const item of playlistItemsResponse.data.items) {
       try {
         const videoId = item.snippet.resourceId.videoId;
         const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
         
-        // Validate video accessibility
-        if (ytdl.validateURL(videoUrl)) {
-          songs.push({
-            title: item.snippet.title,
-            url: videoUrl,
-            duration: 'Unknown',
-            thumbnail: item.snippet.thumbnails?.default?.url || null
-          });
-        }
+        songs.push({
+          title: item.snippet.title,
+          url: videoUrl,
+          duration: 'Unknown',
+          thumbnail: item.snippet.thumbnails?.default?.url || null
+        });
         
         processedCount++;
         
-        // Update progress every 10 videos
         if (processedCount % 10 === 0) {
           await importMessage.edit(`🔄 Processing videos... ${processedCount}/${playlistItemsResponse.data.items.length}`);
         }
         
-        // Small delay to avoid rate limiting
         if (processedCount % 5 === 0) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       } catch (videoError) {
         console.error('Video processing error:', videoError);
-        continue; // Skip invalid videos
+        continue;
       }
     }
 
@@ -246,7 +233,6 @@ async function importYouTubePlaylist(message, youtubePlaylist) {
       return await importMessage.edit('❌ No accessible videos found in this playlist.');
     }
 
-    // Check if playlist already exists
     const existingPlaylist = await Playlist.findOne({
       userId: message.author.id,
       guildId: message.guild.id,

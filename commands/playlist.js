@@ -1,6 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const Playlist = require('../models/Playlist');
-const ytdl = require('ytdl-core');
+const youtubedl = require('youtube-dl-exec');
 const ytSearch = require('youtube-search-api');
 const musicCommands = require('./music');
 
@@ -79,17 +79,37 @@ async function deletePlaylist(message, args) {
 
 async function validateYouTubeVideo(url) {
   try {
-    if (!ytdl.validateURL(url)) {
-      return null;
+    // Rate limiting
+    const now = Date.now();
+    if (now - lastSearchTime < SEARCH_DELAY) {
+      await new Promise(resolve => setTimeout(resolve, SEARCH_DELAY));
     }
-    
-    const info = await ytdl.getBasicInfo(url);
-    return {
-      title: info.videoDetails.title,
-      url: info.videoDetails.video_url,
-      duration: info.videoDetails.lengthSeconds,
-      thumbnail: info.videoDetails.thumbnails?.[0]?.url
-    };
+    lastSearchTime = Date.now();
+
+    const info = await youtubedl(url, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      noWarnings: true,
+      ignoreErrors: true,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      referer: 'https://www.youtube.com/',
+      addHeader: [
+        'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language:en-US,en;q=0.5',
+        'Accept-Encoding:gzip, deflate',
+        'Connection:keep-alive'
+      ]
+    });
+
+    if (info && info.title && info.webpage_url) {
+      return {
+        title: info.title,
+        url: info.webpage_url,
+        duration: info.duration ? info.duration.toString() : 'Unknown',
+        thumbnail: info.thumbnail
+      };
+    }
+    return null;
   } catch (error) {
     console.error('Video validation error:', error);
     return null;
@@ -118,13 +138,6 @@ async function addSong(message, args) {
     let song;
     const searchMessage = await message.reply('🔍 Searching for song...');
 
-    // Rate limiting
-    const now = Date.now();
-    if (now - lastSearchTime < SEARCH_DELAY) {
-      await new Promise(resolve => setTimeout(resolve, SEARCH_DELAY));
-    }
-    lastSearchTime = Date.now();
-
     // Check if it's a YouTube URL
     if (songQuery.includes('youtube.com/watch') || songQuery.includes('youtu.be/')) {
       const videoInfo = await validateYouTubeVideo(songQuery);
@@ -133,9 +146,9 @@ async function addSong(message, args) {
       }
       song = videoInfo;
     } else {
-      // Search for song using YouTube search API with anti-bot measures
+      // Search for song using YouTube search API
       try {
-        const results = await ytSearch.GetListByKeyword(songQuery, false, 3);
+        const results = await ytSearch.GetListByKeyword(songQuery, false, 5);
         if (!results.items?.length) {
           return await searchMessage.edit('❌ No results found for your search!');
         }
@@ -165,7 +178,7 @@ async function addSong(message, args) {
     playlist.songs.push({
       title: song.title,
       url: song.url,
-      duration: song.duration ? song.duration.toString() : 'Unknown',
+      duration: song.duration,
       thumbnail: song.thumbnail
     });
     playlist.updatedAt = new Date();
