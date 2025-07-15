@@ -1,8 +1,70 @@
 const { joinVoiceChannel, createAudioPlayer, entersState, VoiceConnectionStatus } = require('@discordjs/voice');
 const { EmbedBuilder } = require('discord.js');
-const ytdl = require('ytdl-core');
+const youtubedl = require('youtube-dl-exec');
 const ytSearch = require('youtube-search-api');
 const musicPlayer = require('../utils/musicPlayer');
+
+// Rate limiting for searches
+let lastSearchTime = 0;
+const SEARCH_DELAY = 1000;
+
+// Extract video ID from YouTube URL
+function extractVideoId(url) {
+  const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  const match = url.match(regex);
+  return match ? match[1] : null;
+}
+
+// Validate YouTube video using youtube-dl-exec
+async function validateYouTubeVideo(url) {
+  try {
+    // Rate limiting
+    const now = Date.now();
+    if (now - lastSearchTime < SEARCH_DELAY) {
+      await new Promise(resolve => setTimeout(resolve, SEARCH_DELAY));
+    }
+    lastSearchTime = Date.now();
+
+    const info = await youtubedl(url, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      noWarnings: true,
+      ignoreErrors: true,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      referer: 'https://www.youtube.com/',
+      addHeader: [
+        'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language:en-US,en;q=0.5',
+        'Accept-Encoding:gzip, deflate',
+        'Connection:keep-alive'
+      ]
+    });
+
+    if (info && info.title && info.webpage_url) {
+      return {
+        title: info.title,
+        url: info.webpage_url,
+        duration: info.duration || 0,
+        thumbnail: info.thumbnail || null
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Video validation error:', error.message);
+    return null;
+  }
+}
+
+// Alternative search function with multiple attempts
+async function searchYouTubeVideos(query, maxResults = 10) {
+  try {
+    const results = await ytSearch.GetListByKeyword(query, false, maxResults);
+    return results.items || [];
+  } catch (error) {
+    console.error('Search error:', error);
+    return [];
+  }
+}
 
 async function playMusic(message, args) {
   const voiceChannel = message.member.voice.channel;
@@ -26,51 +88,70 @@ async function playMusic(message, args) {
     const searchMessage = await message.reply('🔍 Searching for your song...');
 
     // Check if it's a YouTube URL
-    if (ytdl.validateURL(query)) {
-      try {
-        const songInfo = await ytdl.getBasicInfo(query);
-        song = {
-          title: songInfo.videoDetails.title,
-          url: songInfo.videoDetails.video_url,
-          duration: songInfo.videoDetails.lengthSeconds,
-          thumbnail: songInfo.videoDetails.thumbnails?.[0]?.url,
-          requester: message.author.username
-        };
-      } catch (infoError) {
-        console.error('YouTube URL error:', infoError);
-        return await searchMessage.edit('❌ This video is not available!');
+    if (query.includes('youtube.com/watch') || query.includes('youtu.be/')) {
+      const videoId = extractVideoId(query);
+      if (videoId) {
+        const directUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        const videoInfo = await validateYouTubeVideo(directUrl);
+        
+        if (videoInfo) {
+          song = {
+            ...videoInfo,
+            requester: message.author.username
+          };
+        } else {
+          return await searchMessage.edit('❌ This YouTube video is not available or restricted!');
+        }
+      } else {
+        return await searchMessage.edit('❌ Invalid YouTube URL format!');
       }
     } else {
-      // Search for song
-      const results = await ytSearch.GetListByKeyword(query, false, 3);
-      if (!results.items?.length) {
-        return await searchMessage.edit('❌ No results found for your search!');
-      }
+      // Search for song with enhanced fallback
+      const searchResults = await searchYouTubeVideos(query, 15);
       
-      // Try multiple results for better success rate
+      if (!searchResults.length) {
+        return await searchMessage.edit('❌ No search results found! Please try a different search term.');
+      }
+
       let videoFound = false;
-      for (const video of results.items) {
+      let attemptCount = 0;
+
+      // Try multiple videos from search results
+      for (const video of searchResults) {
+        attemptCount++;
+        
+        if (attemptCount > 1 && attemptCount <= 10) {
+          await searchMessage.edit(`🔍 Searching... (${attemptCount}/${Math.min(10, searchResults.length)})`);
+        }
+
         const testUrl = `https://www.youtube.com/watch?v=${video.id}`;
+        console.log(`Attempting video ${attemptCount}: ${video.title}`);
+        
         try {
-          if (ytdl.validateURL(testUrl)) {
-            const songInfo = await ytdl.getBasicInfo(testUrl);
+          const videoInfo = await validateYouTubeVideo(testUrl);
+          
+          if (videoInfo) {
             song = {
-              title: songInfo.videoDetails.title,
-              url: songInfo.videoDetails.video_url,
-              duration: songInfo.videoDetails.lengthSeconds,
-              thumbnail: songInfo.videoDetails.thumbnails?.[0]?.url,
+              ...videoInfo,
               requester: message.author.username
             };
             videoFound = true;
+            console.log(`✅ Successfully validated: ${videoInfo.title}`);
             break;
+          } else {
+            console.log(`❌ Validation failed for: ${video.title}`);
           }
         } catch (testError) {
+          console.log(`❌ Error testing video ${video.title}: ${testError.message}`);
           continue;
         }
+
+        // Break if we've tried enough videos
+        if (attemptCount >= 10) break;
       }
-      
+
       if (!videoFound) {
-        return await searchMessage.edit('❌ No available videos found for your search!');
+        return await searchMessage.edit('❌ No available videos found for your search! Try:\n• Using a direct YouTube URL\n• Searching for a different song\n• Trying a more specific search term');
       }
     }
 
@@ -86,6 +167,7 @@ async function playMusic(message, args) {
           adapterCreator: message.guild.voiceAdapterCreator,
         });
 
+        // Wait for connection to be ready
         await entersState(connection, VoiceConnectionStatus.Ready, 30000);
         
         const player = createAudioPlayer();
@@ -99,8 +181,10 @@ async function playMusic(message, args) {
 
         connection.subscribe(player);
         
+        // Enhanced connection error handling
         connection.on('error', error => {
           console.error('Voice connection error:', error);
+          message.channel.send('❌ Voice connection error occurred.');
           musicPlayer.deleteQueue(message.guild.id);
         });
 
@@ -111,6 +195,7 @@ async function playMusic(message, args) {
               entersState(connection, VoiceConnectionStatus.Connecting, 5000),
             ]);
           } catch (error) {
+            console.log('Voice connection lost permanently');
             connection.destroy();
             musicPlayer.deleteQueue(message.guild.id);
           }
@@ -118,13 +203,16 @@ async function playMusic(message, args) {
 
         musicPlayer.setQueue(message.guild.id, queueConstruct);
         
+        // Start playing the song
         await musicPlayer.playSong(message.guild, song);
+        
       } catch (connectionError) {
         console.error('Connection Error:', connectionError);
-        message.channel.send('❌ Failed to join voice channel. Please try again.');
+        message.channel.send('❌ Failed to join voice channel. Please check bot permissions and try again.');
         return;
       }
     } else {
+      // Add to existing queue
       serverQueue.songs.push(song);
       const embed = new EmbedBuilder()
         .setTitle('✅ Added to Queue')
@@ -140,7 +228,7 @@ async function playMusic(message, args) {
     }
   } catch (error) {
     console.error('Play command error:', error);
-    message.reply('❌ An error occurred while trying to play the song.');
+    message.reply('❌ An error occurred while trying to play the song. Please try again.');
   }
 }
 
