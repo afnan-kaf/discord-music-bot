@@ -1,125 +1,200 @@
-const { google } = require('googleapis');
 const { EmbedBuilder } = require('discord.js');
+const { google } = require('googleapis');
 const Playlist = require('../models/Playlist');
+const ytdl = require('ytdl-core');
 
 const youtube = google.youtube('v3');
-const oauth2Client = new google.auth.OAuth2(
+const OAuth2 = google.auth.OAuth2;
+
+const oauth2Client = new OAuth2(
   process.env.YOUTUBE_CLIENT_ID,
   process.env.YOUTUBE_CLIENT_SECRET,
   process.env.YOUTUBE_REDIRECT_URI
 );
 
+// Store user tokens in memory (in production, use a database)
 const userTokens = new Map();
 
+// Rate limiting for YouTube API calls
+let lastYouTubeApiCall = 0;
+const YOUTUBE_API_DELAY = 1000; // 1 second between API calls
+
 async function authenticateYouTube(message) {
+  const scopes = [
+    'https://www.googleapis.com/auth/youtube.readonly'
+  ];
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/youtube.readonly'],
+    scope: scopes,
+    // Add state parameter for security
     state: message.author.id
   });
 
   const embed = new EmbedBuilder()
     .setTitle('🔐 YouTube Authentication')
-    .setDescription(`[Click here to authenticate with YouTube](${authUrl})`)
+    .setDescription('Click the link below to authenticate with YouTube:')
     .setColor('#FF0000')
-    .addFields({
-      name: 'Instructions',
-      value: '1. Click the link above\n2. Sign in to your YouTube account\n3. Grant permissions\n4. Copy the authorization code\n5. Use `ftr.authcode <code>` to complete authentication'
-    });
+    .addFields(
+      { name: '🔗 Authentication Link', value: `[Click here to authenticate](${authUrl})` },
+      { name: '📋 Instructions', value: '1. Click the link above\n2. Sign in to your YouTube account\n3. Copy the authorization code\n4. Use `ftm.authcode <code>` to complete authentication' }
+    )
+    .setFooter({ text: 'This allows the bot to access your YouTube playlists (read-only)' });
 
   await message.reply({ embeds: [embed] });
 }
 
 async function handleAuthCode(message, args) {
   if (!args.length) {
-    return message.reply('❌ Please provide the authorization code!');
+    return message.reply('❌ Please provide the authorization code from YouTube!');
   }
 
   const code = args[0];
-  
+
   try {
     const { tokens } = await oauth2Client.getToken(code);
-    userTokens.set(message.author.id, tokens);
     
+    // Store tokens securely
+    userTokens.set(message.author.id, {
+      ...tokens,
+      expiry_date: Date.now() + (tokens.expires_in * 1000)
+    });
+
     const embed = new EmbedBuilder()
       .setTitle('✅ Authentication Successful')
-      .setDescription('You can now import your YouTube playlists!')
+      .setDescription('You can now import your YouTube playlists using `ftm.import-playlist`!')
       .setColor('#4CAF50');
-    
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Auth error:', error);
-    message.reply('❌ Invalid authorization code. Please try again.');
+    message.reply('❌ Invalid authorization code. Please try again with `ftm.auth-youtube`.');
   }
+}
+
+async function refreshTokenIfNeeded(userId) {
+  const userToken = userTokens.get(userId);
+  if (!userToken) return false;
+
+  // Check if token will expire in next 5 minutes
+  if (userToken.expiry_date && userToken.expiry_date - Date.now() < 300000) {
+    try {
+      oauth2Client.setCredentials(userToken);
+      const { credentials } = await oauth2Client.refreshAccessToken();
+      userTokens.set(userId, {
+        ...credentials,
+        expiry_date: Date.now() + (credentials.expires_in * 1000)
+      });
+      return true;
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      return false;
+    }
+  }
+  return true;
 }
 
 async function importPlaylist(message) {
   const userToken = userTokens.get(message.author.id);
   if (!userToken) {
-    return message.reply('❌ Please authenticate with YouTube first using `ftr.auth-youtube`');
+    return message.reply('❌ Please authenticate with YouTube first using `ftm.auth-youtube`');
   }
 
-  oauth2Client.setCredentials(userToken);
+  // Refresh token if needed
+  if (!await refreshTokenIfNeeded(message.author.id)) {
+    return message.reply('❌ Authentication expired. Please re-authenticate with `ftm.auth-youtube`');
+  }
+
+  oauth2Client.setCredentials(userTokens.get(message.author.id));
 
   try {
+    // Rate limiting for YouTube API
+    const now = Date.now();
+    if (now - lastYouTubeApiCall < YOUTUBE_API_DELAY) {
+      await new Promise(resolve => setTimeout(resolve, YOUTUBE_API_DELAY));
+    }
+    lastYouTubeApiCall = Date.now();
+
     const playlistsResponse = await youtube.playlists.list({
       auth: oauth2Client,
-      part: 'snippet',
+      part: 'snippet,contentDetails',
       mine: true,
-      maxResults: 50
+      maxResults: 25
     });
 
-    if (!playlistsResponse.data.items.length) {
+    if (!playlistsResponse.data.items || !playlistsResponse.data.items.length) {
       return message.reply('❌ No playlists found in your YouTube account!');
     }
 
     const embed = new EmbedBuilder()
       .setTitle('📺 Your YouTube Playlists')
-      .setColor('#FF0000');
+      .setColor('#FF0000')
+      .setFooter({ text: 'Reply with the number of the playlist you want to import' });
 
     let playlistList = '';
     playlistsResponse.data.items.forEach((playlist, index) => {
-      playlistList += `${index + 1}. **${playlist.snippet.title}**\n`;
+      const itemCount = playlist.contentDetails.itemCount || 0;
+      playlistList += `${index + 1}. **${playlist.snippet.title}** (${itemCount} videos)\n`;
     });
 
     embed.setDescription(playlistList);
     embed.addFields({
-      name: 'Import Instructions',
-      value: 'Reply with the number of the playlist you want to import (e.g., `1`)'
+      name: '📋 Import Instructions',
+      value: 'Reply with the number of the playlist you want to import (e.g., `1`)\n⏰ You have 30 seconds to respond'
     });
 
     await message.reply({ embeds: [embed] });
 
+    // Set up message collector for user response
     const filter = (response) => {
-      return response.author.id === message.author.id && 
-             !isNaN(response.content) && 
-             parseInt(response.content) > 0 && 
-             parseInt(response.content) <= playlistsResponse.data.items.length;
+      return response.author.id === message.author.id &&
+        !isNaN(response.content) &&
+        parseInt(response.content) > 0 &&
+        parseInt(response.content) <= playlistsResponse.data.items.length;
     };
 
-    const collector = message.channel.createMessageCollector({ filter, time: 30000, max: 1 });
+    const collector = message.channel.createMessageCollector({ 
+      filter, 
+      time: 30000, 
+      max: 1 
+    });
 
     collector.on('collect', async (response) => {
       const selectedIndex = parseInt(response.content) - 1;
       const selectedPlaylist = playlistsResponse.data.items[selectedIndex];
-      
       await importYouTubePlaylist(message, selectedPlaylist);
     });
 
     collector.on('end', (collected) => {
       if (collected.size === 0) {
-        message.channel.send('⏰ Import timeout. Please try again.');
+        message.channel.send('⏰ Import timeout. Please run `ftm.import-playlist` again to try again.');
       }
     });
 
   } catch (error) {
     console.error('Import playlist error:', error);
-    message.reply('❌ An error occurred while fetching your playlists.');
+    
+    if (error.code === 401) {
+      message.reply('❌ Authentication expired. Please re-authenticate with `ftm.auth-youtube`');
+    } else if (error.code === 403) {
+      message.reply('❌ YouTube API quota exceeded. Please try again later.');
+    } else {
+      message.reply('❌ An error occurred while fetching your playlists. Please try again.');
+    }
   }
 }
 
 async function importYouTubePlaylist(message, youtubePlaylist) {
+  const importMessage = await message.reply('🔄 Importing playlist... This may take a moment.');
+
   try {
+    // Rate limiting for YouTube API
+    const now = Date.now();
+    if (now - lastYouTubeApiCall < YOUTUBE_API_DELAY) {
+      await new Promise(resolve => setTimeout(resolve, YOUTUBE_API_DELAY));
+    }
+    lastYouTubeApiCall = Date.now();
+
     const playlistItemsResponse = await youtube.playlistItems.list({
       auth: oauth2Client,
       part: 'snippet',
@@ -127,13 +202,51 @@ async function importYouTubePlaylist(message, youtubePlaylist) {
       maxResults: 50
     });
 
-    const songs = playlistItemsResponse.data.items.map(item => ({
-      title: item.snippet.title,
-      url: `https://www.youtube.com/watch?v=${item.snippet.resourceId.videoId}`,
-      duration: 'Unknown',
-      thumbnail: item.snippet.thumbnails?.default?.url
-    }));
+    if (!playlistItemsResponse.data.items || !playlistItemsResponse.data.items.length) {
+      return await importMessage.edit('❌ This playlist is empty or contains no accessible videos.');
+    }
 
+    const songs = [];
+    let processedCount = 0;
+
+    // Process videos with validation
+    for (const item of playlistItemsResponse.data.items) {
+      try {
+        const videoId = item.snippet.resourceId.videoId;
+        const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        
+        // Validate video accessibility
+        if (ytdl.validateURL(videoUrl)) {
+          songs.push({
+            title: item.snippet.title,
+            url: videoUrl,
+            duration: 'Unknown',
+            thumbnail: item.snippet.thumbnails?.default?.url || null
+          });
+        }
+        
+        processedCount++;
+        
+        // Update progress every 10 videos
+        if (processedCount % 10 === 0) {
+          await importMessage.edit(`🔄 Processing videos... ${processedCount}/${playlistItemsResponse.data.items.length}`);
+        }
+        
+        // Small delay to avoid rate limiting
+        if (processedCount % 5 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (videoError) {
+        console.error('Video processing error:', videoError);
+        continue; // Skip invalid videos
+      }
+    }
+
+    if (songs.length === 0) {
+      return await importMessage.edit('❌ No accessible videos found in this playlist.');
+    }
+
+    // Check if playlist already exists
     const existingPlaylist = await Playlist.findOne({
       userId: message.author.id,
       guildId: message.guild.id,
@@ -159,14 +272,27 @@ async function importYouTubePlaylist(message, youtubePlaylist) {
     }
 
     const embed = new EmbedBuilder()
-      .setTitle('✅ Playlist Imported')
-      .setDescription(`Imported **${youtubePlaylist.snippet.title}** with ${songs.length} songs`)
-      .setColor('#4CAF50');
-    
-    await message.reply({ embeds: [embed] });
+      .setTitle('✅ Playlist Imported Successfully')
+      .setDescription(`Imported **${youtubePlaylist.snippet.title}**`)
+      .addFields(
+        { name: '📊 Statistics', value: `${songs.length} accessible videos imported\n${processedCount - songs.length} videos skipped (unavailable)` },
+        { name: '🎵 Usage', value: `Use \`ftm.play-playlist ${youtubePlaylist.snippet.title}\` to play this playlist` }
+      )
+      .setColor('#4CAF50')
+      .setThumbnail(youtubePlaylist.snippet.thumbnails?.default?.url);
+
+    await importMessage.edit({ content: '', embeds: [embed] });
+
   } catch (error) {
     console.error('Import YouTube playlist error:', error);
-    message.reply('❌ An error occurred while importing the playlist.');
+    
+    if (error.code === 401) {
+      await importMessage.edit('❌ Authentication expired during import. Please re-authenticate with `ftm.auth-youtube`');
+    } else if (error.code === 403) {
+      await importMessage.edit('❌ YouTube API quota exceeded. Please try again later.');
+    } else {
+      await importMessage.edit('❌ An error occurred while importing the playlist. Please try again.');
+    }
   }
 }
 

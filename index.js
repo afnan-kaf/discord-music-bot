@@ -4,6 +4,7 @@ const musicPlayer = require('./utils/musicPlayer');
 const musicCommands = require('./commands/music');
 const playlistCommands = require('./commands/playlist');
 const youtubeCommands = require('./commands/youtube');
+const express = require('express');
 require('dotenv').config();
 
 const client = new Client({
@@ -15,20 +16,49 @@ const client = new Client({
   ]
 });
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI).then(() => {
+// HTTP server for Render deployment
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Health check endpoints
+app.get('/', (req, res) => {
+  res.json({
+    status: 'FTR Music Bot is running!',
+    bot: client.user ? client.user.tag : 'offline',
+    uptime: process.uptime(),
+    guilds: client.guilds.cache.size,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    bot: client.user ? 'online' : 'offline',
+    queues: musicPlayer.queues ? musicPlayer.queues.size : 0,
+    memory: process.memoryUsage(),
+    uptime: process.uptime()
+  });
+});
+
+// MongoDB connection
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
   console.log('✅ Connected to MongoDB');
 }).catch(err => {
   console.error('❌ MongoDB connection error:', err);
 });
 
 client.once('ready', () => {
-  console.log(`🤖 ${client.user.tag} is online!`);
+  console.log(`🎵 ${client.user.tag} is online!`);
   client.user.setActivity('🎵 FTR Music from YouTube', { type: 'LISTENING' });
 });
 
+// Command handler with updated prefix
 client.on('messageCreate', async message => {
-  const prefix = 'ftr.';
+  const prefix = 'ftm.';
   
   if (!message.content.startsWith(prefix) || message.author.bot) return;
 
@@ -96,21 +126,21 @@ async function showHelp(message) {
     .addFields(
       { 
         name: '🎶 Music Commands', 
-        value: '`ftr.play <song/url>` or `ftr.p` - Play music\n`ftr.pause` - Pause current song\n`ftr.resume` - Resume paused song\n`ftr.skip` - Skip current song\n`ftr.queue` or `ftr.q` - Show current queue\n`ftr.stop` - Stop music and clear queue', 
+        value: '`ftm.play <song/url>` or `ftm.p` - Play music\n`ftm.pause` - Pause current song\n`ftm.resume` - Resume paused song\n`ftm.skip` - Skip current song\n`ftm.queue` or `ftm.q` - Show current queue\n`ftm.stop` - Stop music and clear queue', 
         inline: false 
       },
       { 
         name: '📝 Playlist Commands', 
-        value: '`ftr.create-playlist <name>` or `ftr.cp` - Create playlist\n`ftr.delete-playlist <name>` or `ftr.dp` - Delete playlist\n`ftr.add-song <playlist> <song>` or `ftr.as` - Add song to playlist\n`ftr.remove-song <playlist> <index>` or `ftr.rs` - Remove song from playlist\n`ftr.my-playlists` or `ftr.mp` - Show your playlists\n`ftr.show-playlist <name>` or `ftr.sp` - Show playlist songs\n`ftr.play-playlist <name>` or `ftr.pp` - Play entire playlist\n`ftr.rename-playlist <old> <new>` or `ftr.rp` - Rename playlist', 
+        value: '`ftm.create-playlist <name>` or `ftm.cp` - Create playlist\n`ftm.delete-playlist <name>` or `ftm.dp` - Delete playlist\n`ftm.add-song <playlist> <song>` or `ftm.as` - Add song to playlist\n`ftm.remove-song <playlist> <index>` or `ftm.rs` - Remove song from playlist\n`ftm.my-playlists` or `ftm.mp` - Show your playlists\n`ftm.show-playlist <name>` or `ftm.sp` - Show playlist songs\n`ftm.play-playlist <name>` or `ftm.pp` - Play entire playlist\n`ftm.rename-playlist <old> <new>` or `ftm.rp` - Rename playlist', 
         inline: false 
       },
       { 
         name: '📺 YouTube Integration', 
-        value: '`ftr.auth-youtube` or `ftr.ay` - Authenticate with YouTube\n`ftr.authcode <code>` - Complete authentication\n`ftr.import-playlist` or `ftr.ip` - Import YouTube playlists', 
+        value: '`ftm.auth-youtube` or `ftm.ay` - Authenticate with YouTube\n`ftm.authcode <code>` - Complete authentication\n`ftm.import-playlist` or `ftm.ip` - Import YouTube playlists', 
         inline: false 
       }
     )
-    .setFooter({ text: 'FTR Music Bot - Enhanced with YouTube Bypassing' });
+    .setFooter({ text: 'FTR Music Bot - Optimized for Render' });
 
   await message.reply({ embeds: [embed] });
 }
@@ -145,33 +175,10 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });
 
-// HTTP server for Render deployment
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-  res.json({
-    status: 'FTR Music Bot is running!',
-    bot: client.user ? client.user.tag : 'offline',
-    uptime: process.uptime(),
-    guilds: client.guilds.cache.size,
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    bot: client.user ? 'online' : 'offline',
-    queues: musicPlayer.queues.size,
-    memory: process.memoryUsage(),
-    uptime: process.uptime()
-  });
-});
-
+// Start HTTP server
 app.listen(PORT, () => {
   console.log(`🌐 HTTP server running on port ${PORT}`);
 });
 
+// Start Discord bot
 client.login(process.env.DISCORD_TOKEN);

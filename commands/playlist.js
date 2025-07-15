@@ -1,7 +1,12 @@
 const { EmbedBuilder } = require('discord.js');
 const Playlist = require('../models/Playlist');
+const ytdl = require('ytdl-core');
 const ytSearch = require('youtube-search-api');
 const musicCommands = require('./music');
+
+// Rate limiting for API calls
+let lastSearchTime = 0;
+const SEARCH_DELAY = 1000; // 1 second between searches
 
 async function createPlaylist(message, args) {
   if (!args.length) {
@@ -29,12 +34,12 @@ async function createPlaylist(message, args) {
     });
 
     await newPlaylist.save();
-    
+
     const embed = new EmbedBuilder()
       .setTitle('✅ Playlist Created')
       .setDescription(`Created playlist: **${playlistName}**`)
       .setColor('#4CAF50');
-    
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Create playlist error:', error);
@@ -64,7 +69,7 @@ async function deletePlaylist(message, args) {
       .setTitle('🗑️ Playlist Deleted')
       .setDescription(`Deleted playlist: **${playlistName}**`)
       .setColor('#F44336');
-    
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Delete playlist error:', error);
@@ -72,14 +77,33 @@ async function deletePlaylist(message, args) {
   }
 }
 
+async function validateYouTubeVideo(url) {
+  try {
+    if (!ytdl.validateURL(url)) {
+      return null;
+    }
+    
+    const info = await ytdl.getBasicInfo(url);
+    return {
+      title: info.videoDetails.title,
+      url: info.videoDetails.video_url,
+      duration: info.videoDetails.lengthSeconds,
+      thumbnail: info.videoDetails.thumbnails?.[0]?.url
+    };
+  } catch (error) {
+    console.error('Video validation error:', error);
+    return null;
+  }
+}
+
 async function addSong(message, args) {
   if (args.length < 2) {
-    return message.reply('❌ Usage: `ftr.add-song <playlist_name> <song_name_or_url>`');
+    return message.reply('❌ Usage: `ftm.add-song <playlist-name> <song-name-or-url>`');
   }
 
   const playlistName = args[0];
   const songQuery = args.slice(1).join(' ');
-  
+
   try {
     const playlist = await Playlist.findOne({
       userId: message.author.id,
@@ -92,32 +116,58 @@ async function addSong(message, args) {
     }
 
     let song;
-    
+    const searchMessage = await message.reply('🔍 Searching for song...');
+
+    // Rate limiting
+    const now = Date.now();
+    if (now - lastSearchTime < SEARCH_DELAY) {
+      await new Promise(resolve => setTimeout(resolve, SEARCH_DELAY));
+    }
+    lastSearchTime = Date.now();
+
     // Check if it's a YouTube URL
     if (songQuery.includes('youtube.com/watch') || songQuery.includes('youtu.be/')) {
-      song = {
-        title: 'YouTube Video',
-        url: songQuery,
-        duration: 0,
-        thumbnail: null
-      };
-    } else {
-      // Search for song using YouTube search API
-      const results = await ytSearch.GetListByKeyword(songQuery, false, 1);
-      if (!results.items?.length) {
-        return message.reply('❌ No results found for your search!');
+      const videoInfo = await validateYouTubeVideo(songQuery);
+      if (!videoInfo) {
+        return await searchMessage.edit('❌ Invalid or unavailable YouTube video!');
       }
-      
-      const video = results.items[0];
-      song = {
-        title: video.title,
-        url: `https://www.youtube.com/watch?v=${video.id}`,
-        duration: 0,
-        thumbnail: video.thumbnail?.thumbnails?.[0]?.url
-      };
+      song = videoInfo;
+    } else {
+      // Search for song using YouTube search API with anti-bot measures
+      try {
+        const results = await ytSearch.GetListByKeyword(songQuery, false, 3);
+        if (!results.items?.length) {
+          return await searchMessage.edit('❌ No results found for your search!');
+        }
+
+        // Try multiple results for better success rate
+        let videoFound = false;
+        for (const video of results.items) {
+          const testUrl = `https://www.youtube.com/watch?v=${video.id}`;
+          const videoInfo = await validateYouTubeVideo(testUrl);
+          
+          if (videoInfo) {
+            song = videoInfo;
+            videoFound = true;
+            break;
+          }
+        }
+
+        if (!videoFound) {
+          return await searchMessage.edit('❌ No available videos found for your search!');
+        }
+      } catch (searchError) {
+        console.error('Search error:', searchError);
+        return await searchMessage.edit('❌ Error searching for the song. Please try again.');
+      }
     }
 
-    playlist.songs.push(song);
+    playlist.songs.push({
+      title: song.title,
+      url: song.url,
+      duration: song.duration ? song.duration.toString() : 'Unknown',
+      thumbnail: song.thumbnail
+    });
     playlist.updatedAt = new Date();
     await playlist.save();
 
@@ -126,8 +176,8 @@ async function addSong(message, args) {
       .setDescription(`Added **${song.title}** to playlist **${playlistName}**`)
       .setThumbnail(song.thumbnail)
       .setColor('#4CAF50');
-    
-    await message.reply({ embeds: [embed] });
+
+    await searchMessage.edit({ content: '', embeds: [embed] });
   } catch (error) {
     console.error('Add song error:', error);
     message.reply('❌ An error occurred while adding the song.');
@@ -136,12 +186,12 @@ async function addSong(message, args) {
 
 async function removeSong(message, args) {
   if (args.length < 2) {
-    return message.reply('❌ Usage: `ftr.remove-song <playlist_name> <song_index>`');
+    return message.reply('❌ Usage: `ftm.remove-song <playlist-name> <song-number>`');
   }
 
   const playlistName = args[0];
   const songIndex = parseInt(args[1]) - 1;
-  
+
   try {
     const playlist = await Playlist.findOne({
       userId: message.author.id,
@@ -154,7 +204,7 @@ async function removeSong(message, args) {
     }
 
     if (songIndex < 0 || songIndex >= playlist.songs.length) {
-      return message.reply('❌ Invalid song index!');
+      return message.reply('❌ Invalid song number! Use `ftm.show-playlist` to see song numbers.');
     }
 
     const removedSong = playlist.songs[songIndex];
@@ -166,7 +216,7 @@ async function removeSong(message, args) {
       .setTitle('🗑️ Song Removed')
       .setDescription(`Removed **${removedSong.title}** from playlist **${playlistName}**`)
       .setColor('#F44336');
-    
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Remove song error:', error);
@@ -182,7 +232,7 @@ async function showPlaylists(message) {
     });
 
     if (!playlists.length) {
-      return message.reply('❌ You don\'t have any playlists yet!');
+      return message.reply('❌ You don\'t have any playlists yet! Use `ftm.create-playlist` to create one.');
     }
 
     const embed = new EmbedBuilder()
@@ -190,12 +240,15 @@ async function showPlaylists(message) {
       .setColor('#9C27B0');
 
     let playlistList = '';
-    playlists.forEach((playlist) => {
+    playlists.forEach((playlist, index) => {
       const songCount = playlist.songs.length;
-      playlistList += `📝 **${playlist.name}** (${songCount} songs)\n`;
+      const isImported = playlist.isYouTubeImported ? '📺' : '📝';
+      playlistList += `${isImported} **${playlist.name}** (${songCount} songs)\n`;
     });
 
     embed.setDescription(playlistList);
+    embed.setFooter({ text: '📺 = YouTube imported, 📝 = Manual playlist' });
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Show playlists error:', error);
@@ -209,7 +262,7 @@ async function showPlaylistSongs(message, args) {
   }
 
   const playlistName = args.join(' ');
-  
+
   try {
     const playlist = await Playlist.findOne({
       userId: message.author.id,
@@ -222,7 +275,7 @@ async function showPlaylistSongs(message, args) {
     }
 
     if (!playlist.songs.length) {
-      return message.reply('❌ This playlist is empty!');
+      return message.reply('❌ This playlist is empty! Use `ftm.add-song` to add songs.');
     }
 
     const embed = new EmbedBuilder()
@@ -231,7 +284,8 @@ async function showPlaylistSongs(message, args) {
 
     let songList = '';
     playlist.songs.slice(0, 15).forEach((song, index) => {
-      songList += `${index + 1}. **${song.title}**\n`;
+      const duration = song.duration !== 'Unknown' ? `[${Math.floor(song.duration / 60)}:${(song.duration % 60).toString().padStart(2, '0')}]` : '[Unknown]';
+      songList += `${index + 1}. **${song.title}** ${duration}\n`;
     });
 
     if (playlist.songs.length > 15) {
@@ -239,6 +293,8 @@ async function showPlaylistSongs(message, args) {
     }
 
     embed.setDescription(songList);
+    embed.setFooter({ text: `Total: ${playlist.songs.length} songs` });
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Show playlist songs error:', error);
@@ -252,7 +308,7 @@ async function playPlaylist(message, args) {
   }
 
   const playlistName = args.join(' ');
-  
+
   try {
     const playlist = await Playlist.findOne({
       userId: message.author.id,
@@ -268,17 +324,24 @@ async function playPlaylist(message, args) {
       return message.reply('❌ This playlist is empty!');
     }
 
-    // Add all songs from playlist to queue
-    for (const song of playlist.songs) {
-      await musicCommands.play(message, [song.url]);
-    }
-
     const embed = new EmbedBuilder()
       .setTitle('🎵 Playing Playlist')
-      .setDescription(`Playing **${playlist.name}** (${playlist.songs.length} songs)`)
+      .setDescription(`Starting playlist **${playlist.name}** (${playlist.songs.length} songs)`)
       .setColor('#2196F3');
-    
+
     await message.reply({ embeds: [embed] });
+
+    // Play the first song, then add the rest to queue
+    const firstSong = playlist.songs[0];
+    await musicCommands.play(message, [firstSong.url]);
+
+    // Add remaining songs to queue with delay to avoid rate limiting
+    for (let i = 1; i < playlist.songs.length; i++) {
+      setTimeout(async () => {
+        await musicCommands.play(message, [playlist.songs[i].url]);
+      }, i * 1000); // 1 second delay between each song
+    }
+
   } catch (error) {
     console.error('Play playlist error:', error);
     message.reply('❌ An error occurred while playing the playlist.');
@@ -287,12 +350,12 @@ async function playPlaylist(message, args) {
 
 async function renamePlaylist(message, args) {
   if (args.length < 2) {
-    return message.reply('❌ Usage: `ftr.rename-playlist <old_name> <new_name>`');
+    return message.reply('❌ Usage: `ftm.rename-playlist <old-name> <new-name>`');
   }
 
   const oldName = args[0];
   const newName = args.slice(1).join(' ');
-  
+
   try {
     const playlist = await Playlist.findOne({
       userId: message.author.id,
@@ -322,7 +385,7 @@ async function renamePlaylist(message, args) {
       .setTitle('✏️ Playlist Renamed')
       .setDescription(`Renamed **${oldName}** to **${newName}**`)
       .setColor('#FF9800');
-    
+
     await message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('Rename playlist error:', error);

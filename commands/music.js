@@ -1,81 +1,13 @@
 const { joinVoiceChannel, createAudioPlayer, entersState, VoiceConnectionStatus } = require('@discordjs/voice');
 const { EmbedBuilder } = require('discord.js');
-const youtubedl = require('youtube-dl-exec');
+const ytdl = require('ytdl-core');
 const ytSearch = require('youtube-search-api');
 const musicPlayer = require('../utils/musicPlayer');
-
-// Enhanced user agents and headers for better bot detection avoidance
-const userAgents = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0'
-];
-
-function getRandomUserAgent() {
-  return userAgents[Math.floor(Math.random() * userAgents.length)];
-}
-
-// Enhanced video info extraction with anti-bot measures
-async function getVideoInfo(url) {
-  const maxRetries = 3;
-  const retryDelay = 2000; // 2 seconds between retries
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`Attempting to get video info (attempt ${attempt}/${maxRetries})...`);
-      
-      const info = await youtubedl(url, {
-        dumpSingleJson: true,
-        noPlaylist: true,
-        noWarnings: true,
-        ignoreErrors: true,
-        userAgent: getRandomUserAgent(),
-        referer: 'https://www.youtube.com/',
-        // Enhanced headers to avoid bot detection
-        addHeader: [
-          'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language:en-US,en;q=0.9,es;q=0.8',
-          'Accept-Encoding:gzip, deflate, br',
-          'Connection:keep-alive',
-          'Upgrade-Insecure-Requests:1',
-          'Sec-Fetch-Dest:document',
-          'Sec-Fetch-Mode:navigate',
-          'Sec-Fetch-Site:none',
-          'Cache-Control:max-age=0'
-        ],
-        // Additional anti-bot options
-        sleepInterval: 1,
-        maxSleepInterval: 5,
-        sleepSubtitles: 1
-      });
-      
-      return {
-        title: info.title || 'Unknown Title',
-        url: info.webpage_url || url,
-        duration: info.duration || 0,
-        thumbnail: info.thumbnail || null,
-        uploader: info.uploader || 'Unknown'
-      };
-      
-    } catch (error) {
-      console.error(`Video info extraction failed (attempt ${attempt}):`, error.message);
-      
-      if (attempt === maxRetries) {
-        throw new Error(`Failed to extract video info after ${maxRetries} attempts`);
-      }
-      
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
-    }
-  }
-}
 
 async function playMusic(message, args) {
   const voiceChannel = message.member.voice.channel;
   if (!voiceChannel) {
-    return message.reply('❌ You need to be in a voice channel!');
+    return message.reply('❌ You need to be in a voice channel to play music!');
   }
 
   const permissions = voiceChannel.permissionsFor(message.client.user);
@@ -94,64 +26,51 @@ async function playMusic(message, args) {
     const searchMessage = await message.reply('🔍 Searching for your song...');
 
     // Check if it's a YouTube URL
-    if (query.includes('youtube.com/watch') || query.includes('youtu.be/')) {
+    if (ytdl.validateURL(query)) {
       try {
-        const videoInfo = await getVideoInfo(query);
+        const songInfo = await ytdl.getBasicInfo(query);
         song = {
-          title: videoInfo.title,
-          url: videoInfo.url,
-          duration: videoInfo.duration,
-          thumbnail: videoInfo.thumbnail,
+          title: songInfo.videoDetails.title,
+          url: songInfo.videoDetails.video_url,
+          duration: songInfo.videoDetails.lengthSeconds,
+          thumbnail: songInfo.videoDetails.thumbnails?.[0]?.url,
           requester: message.author.username
         };
-        console.log('Direct URL video info retrieved:', song.title);
       } catch (infoError) {
-        console.error('Direct URL failed:', infoError);
-        await searchMessage.edit('❌ This video is not available due to YouTube restrictions.');
-        return;
+        console.error('YouTube URL error:', infoError);
+        return await searchMessage.edit('❌ This video is not available!');
       }
     } else {
-      // Search for song using YouTube Search API
-      try {
-        const results = await ytSearch.GetListByKeyword(query, false, 5); // Get 5 results for fallback
-        if (!results.items?.length) {
-          await searchMessage.edit('❌ No results found for your search!');
-          return;
-        }
-        
-        // Try multiple videos from search results
-        let videoFound = false;
-        for (const [index, video] of results.items.entries()) {
-          const videoUrl = `https://www.youtube.com/watch?v=${video.id}`;
-          console.log(`Trying video ${index + 1}: ${video.title}`);
-          
-          try {
-            const videoInfo = await getVideoInfo(videoUrl);
+      // Search for song
+      const results = await ytSearch.GetListByKeyword(query, false, 3);
+      if (!results.items?.length) {
+        return await searchMessage.edit('❌ No results found for your search!');
+      }
+      
+      // Try multiple results for better success rate
+      let videoFound = false;
+      for (const video of results.items) {
+        const testUrl = `https://www.youtube.com/watch?v=${video.id}`;
+        try {
+          if (ytdl.validateURL(testUrl)) {
+            const songInfo = await ytdl.getBasicInfo(testUrl);
             song = {
-              title: videoInfo.title,
-              url: videoInfo.url,
-              duration: videoInfo.duration,
-              thumbnail: videoInfo.thumbnail,
+              title: songInfo.videoDetails.title,
+              url: songInfo.videoDetails.video_url,
+              duration: songInfo.videoDetails.lengthSeconds,
+              thumbnail: songInfo.videoDetails.thumbnails?.[0]?.url,
               requester: message.author.username
             };
             videoFound = true;
-            console.log('Successfully retrieved info for:', song.title);
             break;
-          } catch (videoError) {
-            console.error(`Video ${video.title} failed info extraction, trying next...`);
-            continue;
           }
+        } catch (testError) {
+          continue;
         }
-        
-        if (!videoFound) {
-          await searchMessage.edit('❌ All search results are blocked by YouTube. Please try a different search term.');
-          return;
-        }
-        
-      } catch (searchError) {
-        console.error('Search Error:', searchError);
-        await searchMessage.edit('❌ Error searching for the song. Please try again.');
-        return;
+      }
+      
+      if (!videoFound) {
+        return await searchMessage.edit('❌ No available videos found for your search!');
       }
     }
 
@@ -179,6 +98,24 @@ async function playMusic(message, args) {
         };
 
         connection.subscribe(player);
+        
+        connection.on('error', error => {
+          console.error('Voice connection error:', error);
+          musicPlayer.deleteQueue(message.guild.id);
+        });
+
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+          try {
+            await Promise.race([
+              entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+              entersState(connection, VoiceConnectionStatus.Connecting, 5000),
+            ]);
+          } catch (error) {
+            connection.destroy();
+            musicPlayer.deleteQueue(message.guild.id);
+          }
+        });
+
         musicPlayer.setQueue(message.guild.id, queueConstruct);
         
         await musicPlayer.playSong(message.guild, song);
@@ -192,7 +129,13 @@ async function playMusic(message, args) {
       const embed = new EmbedBuilder()
         .setTitle('✅ Added to Queue')
         .setDescription(`**${song.title}**`)
-        .setColor('#4CAF50');
+        .setThumbnail(song.thumbnail)
+        .setColor('#4CAF50')
+        .addFields(
+          { name: 'Position in queue', value: `${serverQueue.songs.length}`, inline: true },
+          { name: 'Requested by', value: song.requester, inline: true }
+        );
+      
       await message.reply({ embeds: [embed] });
     }
   } catch (error) {
@@ -201,42 +144,103 @@ async function playMusic(message, args) {
   }
 }
 
-// ... rest of your music command functions remain the same
+async function pause(message) {
+  if (!message.member.voice.channel) {
+    return message.reply('❌ You need to be in a voice channel to pause music!');
+  }
+
+  const serverQueue = musicPlayer.getQueue(message.guild.id);
+  if (!serverQueue) {
+    return message.reply('❌ There is no music playing!');
+  }
+
+  const success = musicPlayer.pauseSong(message.guild.id);
+  if (success) {
+    message.reply('⏸️ Music paused!');
+  } else {
+    message.reply('❌ Nothing is playing!');
+  }
+}
+
+async function resume(message) {
+  if (!message.member.voice.channel) {
+    return message.reply('❌ You need to be in a voice channel to resume music!');
+  }
+
+  const serverQueue = musicPlayer.getQueue(message.guild.id);
+  if (!serverQueue) {
+    return message.reply('❌ There is no music to resume!');
+  }
+
+  const success = musicPlayer.resumeSong(message.guild.id);
+  if (success) {
+    message.reply('▶️ Music resumed!');
+  } else {
+    message.reply('❌ Nothing to resume!');
+  }
+}
+
+async function skip(message) {
+  if (!message.member.voice.channel) {
+    return message.reply('❌ You need to be in a voice channel to skip music!');
+  }
+
+  const serverQueue = musicPlayer.getQueue(message.guild.id);
+  if (!serverQueue || !serverQueue.songs.length) {
+    return message.reply('❌ There is no music to skip!');
+  }
+
+  const success = musicPlayer.skipSong(message.guild);
+  if (success) {
+    message.reply('⏭️ Song skipped!');
+  } else {
+    message.reply('❌ Nothing to skip!');
+  }
+}
+
+async function showQueue(message) {
+  const serverQueue = musicPlayer.getQueue(message.guild.id);
+  if (!serverQueue?.songs.length) {
+    return message.reply('❌ The queue is empty!');
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle('🎵 Current Queue')
+    .setColor('#2196F3');
+
+  let queueList = '';
+  serverQueue.songs.slice(0, 10).forEach((song, index) => {
+    const duration = song.duration ? `[${Math.floor(song.duration / 60)}:${(song.duration % 60).toString().padStart(2, '0')}]` : '[Unknown]';
+    queueList += `${index === 0 ? '🎵' : `${index}.`} **${song.title}** ${duration} (${song.requester})\n`;
+  });
+
+  if (serverQueue.songs.length > 10) {
+    queueList += `\n... and ${serverQueue.songs.length - 10} more songs`;
+  }
+
+  embed.setDescription(queueList);
+  await message.reply({ embeds: [embed] });
+}
+
+async function stop(message) {
+  if (!message.member.voice.channel) {
+    return message.reply('❌ You need to be in a voice channel to stop music!');
+  }
+
+  const serverQueue = musicPlayer.getQueue(message.guild.id);
+  if (!serverQueue) {
+    return message.reply('❌ There is no music playing!');
+  }
+
+  musicPlayer.deleteQueue(message.guild.id);
+  message.reply('🛑 Music stopped and queue cleared!');
+}
 
 module.exports = {
   play: playMusic,
-  pause: async (message) => {
-    const success = musicPlayer.pauseSong(message.guild.id);
-    message.reply(success ? '⏸️ Paused!' : '❌ Nothing is playing!');
-  },
-  resume: async (message) => {
-    const success = musicPlayer.resumeSong(message.guild.id);
-    message.reply(success ? '▶️ Resumed!' : '❌ Nothing to resume!');
-  },
-  skip: async (message) => {
-    const success = musicPlayer.skipSong(message.guild);
-    message.reply(success ? '⏭️ Skipped!' : '❌ Nothing to skip!');
-  },
-  showQueue: async (message) => {
-    const serverQueue = musicPlayer.getQueue(message.guild.id);
-    if (!serverQueue?.songs.length) {
-      return message.reply('❌ Queue is empty!');
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('🎵 Current Queue')
-      .setColor('#2196F3');
-
-    let queueList = '';
-    serverQueue.songs.slice(0, 10).forEach((song, index) => {
-      queueList += `${index === 0 ? '🎵' : `${index}.`} **${song.title}** (${song.requester})\n`;
-    });
-
-    embed.setDescription(queueList);
-    await message.reply({ embeds: [embed] });
-  },
-  stop: async (message) => {
-    musicPlayer.deleteQueue(message.guild.id);
-    message.reply('🛑 Stopped and cleared queue!');
-  }
+  pause,
+  resume,
+  skip,
+  showQueue,
+  stop
 };

@@ -1,19 +1,17 @@
 {
   "name": "discord-music-bot",
-  "version": "1.0.0",
-  "description": "FTR Music Bot with YouTube integration using youtube-dl-exec",
+  "version": "2.0.0",
+  "description": "Discord Music Bot optimized for Render deployment",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "build": "npm install",
-    "postinstall": "python3 -m pip install yt-dlp youtube-dl || pip3 install yt-dlp youtube-dl || pip install yt-dlp youtube-dl || echo 'Python dependencies installation completed'"
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
     "@discordjs/voice": "^0.18.0",
     "@discordjs/opus": "^0.9.0",
-    "youtube-dl-exec": "^2.4.13",
+    "ytdl-core": "^4.11.5",
     "youtube-search-api": "^1.2.0",
     "mongoose": "^8.0.3",
     "googleapis": "^129.0.0",
