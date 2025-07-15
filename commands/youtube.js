@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const { google } = require('googleapis');
 const Playlist = require('../models/Playlist');
-const youtubedl = require('youtube-dl-exec');
+//const youtubedl = require('youtube-dl-exec');
 
 const youtube = google.youtube('v3');
 const OAuth2 = google.auth.OAuth2;

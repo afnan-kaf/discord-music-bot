@@ -1,6 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const Playlist = require('../models/Playlist');
-const youtubedl = require('youtube-dl-exec');
+const ytdl = require('ytdl-core');
 const ytSearch = require('youtube-search-api');
 const musicCommands = require('./music');
 
@@ -86,30 +86,22 @@ async function validateYouTubeVideo(url) {
     }
     lastSearchTime = Date.now();
 
-    const info = await youtubedl(url, {
-      dumpSingleJson: true,
-      noPlaylist: true,
-      noWarnings: true,
-      ignoreErrors: true,
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      referer: 'https://www.youtube.com/',
-      addHeader: [
-        'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language:en-US,en;q=0.5',
-        'Accept-Encoding:gzip, deflate',
-        'Connection:keep-alive'
-      ]
-    });
-
-    if (info && info.title && info.webpage_url) {
-      return {
-        title: info.title,
-        url: info.webpage_url,
-        duration: info.duration ? info.duration.toString() : 'Unknown',
-        thumbnail: info.thumbnail
-      };
+    if (!ytdl.validateURL(url)) {
+      return null;
     }
-    return null;
+
+    const info = await ytdl.getBasicInfo(url);
+    
+    if (info.videoDetails.isLiveContent) {
+      return null; // Skip live streams
+    }
+
+    return {
+      title: info.videoDetails.title,
+      url: info.videoDetails.video_url,
+      duration: info.videoDetails.lengthSeconds ? info.videoDetails.lengthSeconds.toString() : 'Unknown',
+      thumbnail: info.videoDetails.thumbnails?.[0]?.url
+    };
   } catch (error) {
     console.error('Video validation error:', error);
     return null;
