@@ -1,6 +1,5 @@
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const { spawn } = require('child_process');
-const { PassThrough } = require('stream');
+const ytdl = require('ytdl-core');
 
 class MusicPlayer {
   constructor() {
@@ -21,7 +20,7 @@ class MusicPlayer {
       console.log('Creating audio stream for:', song.title);
       console.log('Using URL:', song.url);
       
-      const stream = await this.createAudioStream(song.url);
+      const stream = await this.createAudioStreamWithRetry(song.url, 3);
       
       const resource = createAudioResource(stream, {
         inputType: 'arbitrary',
@@ -56,122 +55,49 @@ class MusicPlayer {
     }
   }
 
+  async createAudioStreamWithRetry(url, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Stream attempt ${attempt}/${maxRetries}`);
+        return await this.createAudioStream(url);
+      } catch (error) {
+        console.error(`Stream attempt ${attempt} failed:`, error.message);
+        
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      }
+    }
+  }
+
   async createAudioStream(url) {
-    return new Promise((resolve, reject) => {
-      // Extended executable paths for different hosting environments
-      const executables = [
-        'yt-dlp',
-        'youtube-dl',
-        '/opt/render/.python/bin/yt-dlp',
-        '/opt/render/.python/bin/youtube-dl',
-        '/home/render/.local/bin/yt-dlp',
-        '/home/render/.local/bin/youtube-dl',
-        'python3 -m yt_dlp',
-        'python3 -m youtube_dl'
-      ];
-      
-      let executableIndex = 0;
-      
-      const tryExecutable = () => {
-        if (executableIndex >= executables.length) {
-          reject(new Error('No working YouTube downloader found'));
-          return;
-        }
-        
-        const executable = executables[executableIndex];
-        console.log(`Trying ${executable}...`);
-        
-        const isPythonModule = executable.includes('python3 -m');
-        let command, args;
-        
-        if (isPythonModule) {
-          command = 'python3';
-          const module = executable.includes('yt_dlp') ? 'yt_dlp' : 'youtube_dl';
-          args = [
-            '-m', module,
-            '--extract-audio',
-            '--audio-format', 'opus',
-            '--audio-quality', '0',
-            '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
-            '--no-playlist',
-            '--quiet',
-            '--no-warnings',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            '--referer', 'https://www.youtube.com/',
-            '--output', '-',
-            url
-          ];
-        } else {
-          command = executable;
-          args = [
-            '--extract-audio',
-            '--audio-format', 'opus',
-            '--audio-quality', '0',
-            '--format', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
-            '--no-playlist',
-            '--quiet',
-            '--no-warnings',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            '--referer', 'https://www.youtube.com/',
-            '--output', '-',
-            url
-          ];
-        }
-
-        const process = spawn(command, args, {
-          stdio: ['ignore', 'pipe', 'pipe']
-        });
-
-        const stream = new PassThrough();
-        let hasData = false;
-        let resolved = false;
-
-        process.stdout.on('data', (chunk) => {
-          if (!resolved) {
-            console.log(`✅ ${executable} started streaming successfully`);
-            resolved = true;
-            resolve(stream);
+    try {
+      const stream = ytdl(url, {
+        filter: 'audioonly',
+        quality: 'lowestaudio',
+        requestOptions: {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
           }
-          hasData = true;
-          stream.write(chunk);
-        });
+        },
+        // Enhanced options for hosting environments
+        highWaterMark: 1 << 25,
+        dlChunkSize: 1024 * 1024
+      });
 
-        process.stdout.on('end', () => {
-          stream.end();
-        });
-
-        process.stderr.on('data', (data) => {
-          console.error(`${executable} stderr:`, data.toString());
-        });
-
-        process.on('error', (error) => {
-          console.error(`${executable} spawn error:`, error.message);
-          if (!resolved) {
-            executableIndex++;
-            tryExecutable();
-          }
-        });
-
-        process.on('close', (code) => {
-          if (code !== 0 && !hasData && !resolved) {
-            console.error(`${executable} process exited with code ${code}`);
-            executableIndex++;
-            tryExecutable();
-          }
-        });
-
-        // Timeout after 20 seconds
-        setTimeout(() => {
-          if (!resolved) {
-            process.kill();
-            executableIndex++;
-            tryExecutable();
-          }
-        }, 20000);
-      };
-      
-      tryExecutable();
-    });
+      return stream;
+    } catch (error) {
+      console.error('ytdl-core error:', error);
+      throw new Error(`Failed to create audio stream: ${error.message}`);
+    }
   }
 
   pauseSong(guildId) {
