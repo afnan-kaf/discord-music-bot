@@ -1,21 +1,9 @@
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const ytdl = require('ytdl-core');
+const axios = require('axios');
 
 class MusicPlayer {
   constructor() {
     this.queues = new Map();
-    // Rotate between different user agents to avoid detection
-    this.userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
-    ];
-  }
-
-  getRandomUserAgent() {
-    return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
   }
 
   async playSong(guild, song) {
@@ -30,9 +18,9 @@ class MusicPlayer {
 
     try {
       console.log('Creating audio stream for:', song.title);
-      console.log('Using URL:', song.url);
+      console.log('Using audio URL:', song.audioUrl);
       
-      const stream = await this.createAudioStreamWithRetry(song.url, 3);
+      const stream = await this.createAudioStreamFromUrl(song.audioUrl);
       
       const resource = createAudioResource(stream, {
         inputType: 'arbitrary',
@@ -43,7 +31,7 @@ class MusicPlayer {
       
       serverQueue.player.once(AudioPlayerStatus.Playing, () => {
         console.log('✅ Now playing:', song.title);
-        serverQueue.textChannel.send(`🎵 **Now playing:** ${song.title}\n*Requested by: ${song.requester}*`);
+        serverQueue.textChannel.send(`🎵 **Now playing:** ${song.title}\n📻 **Source:** ${song.source.toUpperCase()}\n*Requested by: ${song.requester}*`);
       });
 
       serverQueue.player.once(AudioPlayerStatus.Idle, () => {
@@ -67,107 +55,24 @@ class MusicPlayer {
     }
   }
 
-  async createAudioStreamWithRetry(url, maxRetries = 3) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        console.log(`Stream attempt ${attempt}/${maxRetries}`);
-        
-        // Add random delay to avoid pattern detection
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 2000));
-        
-        return await this.createAudioStream(url);
-      } catch (error) {
-        console.error(`Stream attempt ${attempt} failed:`, error.message);
-        
-        if (attempt === maxRetries) {
-          throw error;
-        }
-        
-        // Exponential backoff with jitter
-        const backoffDelay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-        await new Promise(resolve => setTimeout(resolve, backoffDelay));
-      }
-    }
-  }
-
-  async createAudioStream(url) {
+  async createAudioStreamFromUrl(audioUrl) {
     try {
-      const stream = ytdl(url, {
-        filter: 'audioonly',
-        quality: 'lowestaudio',
-        requestOptions: {
-          headers: {
-            // Enhanced user agent rotation
-            'User-Agent': this.getRandomUserAgent(),
-            
-            // Comprehensive browser headers
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9,bn;q=0.8,hi;q=0.7', // Added Bengali and Hindi
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            
-            // Security headers that browsers send
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Sec-Fetch-User': '?1',
-            'Sec-CH-UA': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'Sec-CH-UA-Mobile': '?0',
-            'Sec-CH-UA-Platform': '"Windows"',
-            
-            // Cache control headers
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            
-            // Additional headers to mimic real browser behavior
-            'DNT': '1',
-            'Referer': 'https://www.youtube.com/',
-            'Origin': 'https://www.youtube.com',
-            
-            // Viewport and device info
-            'Viewport-Width': '1920',
-            'Device-Memory': '8',
-            'DPR': '1'
-          },
-          // Additional request options
-          timeout: 30000,
-          agent: false
+      const response = await axios({
+        method: 'GET',
+        url: audioUrl,
+        responseType: 'stream',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'audio/*,*/*;q=0.9',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive'
         },
-        // Enhanced ytdl-core options
-        highWaterMark: 1 << 25,
-        dlChunkSize: 1024 * 1024,
-        
-        // Format selection to prefer available formats
-        format: 'audioonly',
-        
-        // Additional options for better compatibility
-        begin: undefined,
-        liveBuffer: 20000,
-        
-        // Custom format selection
-        chooseBestFormat: true
+        timeout: 30000
       });
 
-      // Add additional error handling for the stream
-      stream.on('error', (error) => {
-        console.error('Stream error:', error);
-        throw error;
-      });
-
-      // Add timeout handling
-      const timeout = setTimeout(() => {
-        stream.destroy();
-        throw new Error('Stream timeout after 30 seconds');
-      }, 30000);
-
-      stream.on('response', () => {
-        clearTimeout(timeout);
-      });
-
-      return stream;
+      return response.data;
     } catch (error) {
-      console.error('ytdl-core error:', error);
       throw new Error(`Failed to create audio stream: ${error.message}`);
     }
   }

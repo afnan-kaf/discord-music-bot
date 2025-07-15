@@ -1,18 +1,17 @@
 {
   "name": "discord-music-bot",
   "version": "2.0.0",
-  "description": "Discord Music Bot optimized for Render deployment",
+  "description": "Discord Music Bot with NewPipe Extractor API",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "postinstall": "pip install --upgrade yt-dlp youtube-dl || pip3 install --upgrade yt-dlp youtube-dl || python3 -m pip install --upgrade yt-dlp youtube-dl || echo 'Binary installation completed'"
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
     "@discordjs/voice": "^0.18.0",
     "@discordjs/opus": "^0.9.0",
-    "ytdl-core": "^4.11.5",
+    "axios": "^1.6.2",
     "youtube-search-api": "^1.2.0",
     "mongoose": "^8.0.3",
     "googleapis": "^129.0.0",
