@@ -15,8 +15,8 @@ function extractVideoId(url) {
   return match ? match[1] : null;
 }
 
-// Validate YouTube video using youtube-dl-exec
-async function validateYouTubeVideo(url) {
+// Enhanced video validation with better error handling
+async function validateYouTubeVideo(url, skipValidation = false) {
   try {
     // Rate limiting
     const now = Date.now();
@@ -24,6 +24,16 @@ async function validateYouTubeVideo(url) {
       await new Promise(resolve => setTimeout(resolve, SEARCH_DELAY));
     }
     lastSearchTime = Date.now();
+
+    // Skip validation for certain error-prone videos
+    if (skipValidation) {
+      return {
+        title: 'YouTube Video',
+        url: url,
+        duration: 0,
+        thumbnail: null
+      };
+    }
 
     const info = await youtubedl(url, {
       dumpSingleJson: true,
@@ -37,7 +47,12 @@ async function validateYouTubeVideo(url) {
         'Accept-Language:en-US,en;q=0.5',
         'Accept-Encoding:gzip, deflate',
         'Connection:keep-alive'
-      ]
+      ],
+      // Add these options to bypass some restrictions
+      geoBypass: true,
+      extractFlat: false,
+      writeSubtitles: false,
+      writeAutoSub: false
     });
 
     if (info && info.title && info.webpage_url) {
@@ -51,15 +66,55 @@ async function validateYouTubeVideo(url) {
     return null;
   } catch (error) {
     console.error('Video validation error:', error.message);
-    return null;
+    
+    // Check for specific error types
+    if (error.message.includes('Video unavailable') || 
+        error.message.includes('This content isn\'t available') ||
+        error.message.includes('Private video') ||
+        error.message.includes('Deleted video')) {
+      return null; // Skip this video
+    }
+    
+    // For other errors, try to return basic info
+    return {
+      title: 'YouTube Video',
+      url: url,
+      duration: 0,
+      thumbnail: null
+    };
   }
 }
 
-// Alternative search function with multiple attempts
-async function searchYouTubeVideos(query, maxResults = 10) {
+// Enhanced search function with broader search terms
+async function searchYouTubeVideos(query, maxResults = 20) {
   try {
-    const results = await ytSearch.GetListByKeyword(query, false, maxResults);
-    return results.items || [];
+    const searchVariations = [
+      query,
+      `${query} official`,
+      `${query} music`,
+      `${query} song`,
+      `${query} audio`,
+      `${query} video`,
+      query.replace(/\s+/g, '') // Remove spaces
+    ];
+
+    for (const searchTerm of searchVariations) {
+      try {
+        const results = await ytSearch.GetListByKeyword(searchTerm, false, maxResults);
+        if (results.items && results.items.length > 0) {
+          console.log(`Found ${results.items.length} results for: ${searchTerm}`);
+          return results.items;
+        }
+      } catch (searchError) {
+        console.log(`Search failed for: ${searchTerm}`);
+        continue;
+      }
+      
+      // Small delay between search variations
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    return [];
   } catch (error) {
     console.error('Search error:', error);
     return [];
@@ -100,14 +155,21 @@ async function playMusic(message, args) {
             requester: message.author.username
           };
         } else {
-          return await searchMessage.edit('❌ This YouTube video is not available or restricted!');
+          // Try to play anyway, bypassing validation
+          song = {
+            title: 'YouTube Video',
+            url: directUrl,
+            duration: 0,
+            thumbnail: null,
+            requester: message.author.username
+          };
         }
       } else {
         return await searchMessage.edit('❌ Invalid YouTube URL format!');
       }
     } else {
-      // Search for song with enhanced fallback
-      const searchResults = await searchYouTubeVideos(query, 15);
+      // Enhanced search with broader terms
+      const searchResults = await searchYouTubeVideos(query, 25);
       
       if (!searchResults.length) {
         return await searchMessage.edit('❌ No search results found! Please try a different search term.');
@@ -115,13 +177,14 @@ async function playMusic(message, args) {
 
       let videoFound = false;
       let attemptCount = 0;
+      let lastWorkingVideo = null;
 
       // Try multiple videos from search results
       for (const video of searchResults) {
         attemptCount++;
         
-        if (attemptCount > 1 && attemptCount <= 10) {
-          await searchMessage.edit(`🔍 Searching... (${attemptCount}/${Math.min(10, searchResults.length)})`);
+        if (attemptCount > 1 && attemptCount <= 15) {
+          await searchMessage.edit(`🔍 Searching... (${attemptCount}/${Math.min(15, searchResults.length)})`);
         }
 
         const testUrl = `https://www.youtube.com/watch?v=${video.id}`;
@@ -130,7 +193,7 @@ async function playMusic(message, args) {
         try {
           const videoInfo = await validateYouTubeVideo(testUrl);
           
-          if (videoInfo) {
+          if (videoInfo && videoInfo.title !== 'YouTube Video') {
             song = {
               ...videoInfo,
               requester: message.author.username
@@ -139,7 +202,15 @@ async function playMusic(message, args) {
             console.log(`✅ Successfully validated: ${videoInfo.title}`);
             break;
           } else {
-            console.log(`❌ Validation failed for: ${video.title}`);
+            // Store as potential fallback
+            lastWorkingVideo = {
+              title: video.title,
+              url: testUrl,
+              duration: 0,
+              thumbnail: video.thumbnail?.thumbnails?.[0]?.url || null,
+              requester: message.author.username
+            };
+            console.log(`📝 Stored as fallback: ${video.title}`);
           }
         } catch (testError) {
           console.log(`❌ Error testing video ${video.title}: ${testError.message}`);
@@ -147,11 +218,18 @@ async function playMusic(message, args) {
         }
 
         // Break if we've tried enough videos
-        if (attemptCount >= 10) break;
+        if (attemptCount >= 15) break;
+      }
+
+      // If no video passed validation, try the last working video
+      if (!videoFound && lastWorkingVideo) {
+        console.log(`🔄 Using fallback video: ${lastWorkingVideo.title}`);
+        song = lastWorkingVideo;
+        videoFound = true;
       }
 
       if (!videoFound) {
-        return await searchMessage.edit('❌ No available videos found for your search! Try:\n• Using a direct YouTube URL\n• Searching for a different song\n• Trying a more specific search term');
+        return await searchMessage.edit(`❌ No available videos found for "${query}"!\n\n**Suggestions:**\n• Try a different search term\n• Use a direct YouTube URL\n• Search for a more popular version of the song\n• Try adding "official" or "music video" to your search`);
       }
     }
 
