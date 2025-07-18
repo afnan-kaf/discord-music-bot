@@ -63,16 +63,16 @@ client.on('messageCreate', async message => {
   } else if (command === 'auth-code') {
     await youtube.handleAuthCode(message, args);
   } else if (command === 'help') {
+    // Centralized help command - only one response
     const embed = new EmbedBuilder()
-      .setTitle('FTM Music Bot Commands')
+      .setTitle('FTR Music Bot Commands')
       .setDescription('All commands start with ftm.')
       .addFields(
         { name: 'Music Controls', value: 'ftm.play/p <name/URL> - Play song\nftm.pause - Pause\nftm.resume - Resume\nftm.stop - Stop\nftm.skip - Skip\nftm.queue - View queue' },
         { name: 'Playlists', value: 'ftm.create-playlist <name> - Create\nftm.add-to-playlist <name> <song/URL> - Add song\nftm.remove-from-playlist <name> <index> - Remove\nftm.show-playlist <name> - Show\nftm.play-playlist <name> - Play\nftm.delete-playlist <name> - Delete' },
         { name: 'YouTube Import', value: 'ftm.auth-youtube - Authenticate\nftm.auth-code <code> - Submit code\nftm.import-youtube-playlist - Import (follow prompts)' }
       )
-      .setColor('#4CAF50')
-      .setFooter({ text: 'FTM Music Bot - Optimized for Render' });
+      .setColor('#4CAF50');
     await message.reply({ embeds: [embed] });
   }
 });
