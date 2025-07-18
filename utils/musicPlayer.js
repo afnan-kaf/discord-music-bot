@@ -1,5 +1,5 @@
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const axios = require('axios');
+const newPipeService = require('./newpipeService');
 
 class MusicPlayer {
   constructor() {
@@ -19,16 +19,10 @@ class MusicPlayer {
     try {
       console.log('Creating audio stream for:', song.title);
       console.log('Using audio URL:', song.audioUrl);
-      
-      const stream = await this.createAudioStreamFromUrl(song.audioUrl);
-      
-      const resource = createAudioResource(stream, {
-        inputType: 'arbitrary',
-        inlineVolume: false
-      });
-      
+      const stream = await newPipeService.createAudioStreamFromUrl(song.audioUrl);
+      const resource = createAudioResource(stream, { inputType: 'arbitrary', inlineVolume: false });
       serverQueue.player.play(resource);
-      
+
       serverQueue.player.once(AudioPlayerStatus.Playing, () => {
         console.log('✅ Now playing:', song.title);
         serverQueue.textChannel.send(`🎵 **Now playing:** ${song.title}\n📻 **Source:** ${song.source.toUpperCase()}\n*Requested by: ${song.requester}*`);
@@ -46,34 +40,11 @@ class MusicPlayer {
         serverQueue.songs.shift();
         this.playSong(guild, serverQueue.songs[0]);
       });
-
     } catch (error) {
       console.error('Error creating stream:', error);
       serverQueue.textChannel.send('❌ Failed to play this song. Skipping...');
       serverQueue.songs.shift();
       this.playSong(guild, serverQueue.songs[0]);
-    }
-  }
-
-  async createAudioStreamFromUrl(audioUrl) {
-    try {
-      const response = await axios({
-        method: 'GET',
-        url: audioUrl,
-        responseType: 'stream',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'audio/*,*/*;q=0.9',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Connection': 'keep-alive'
-        },
-        timeout: 30000
-      });
-
-      return response.data;
-    } catch (error) {
-      throw new Error(`Failed to create audio stream: ${error.message}`);
     }
   }
 

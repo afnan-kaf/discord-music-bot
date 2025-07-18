@@ -2,7 +2,7 @@ const axios = require('axios');
 
 class NewPipeService {
   constructor() {
-    // Multiple NewPipe API instances for redundancy
+    // Multiple NewPipe API instances for redundancy and anti-flagging
     this.instances = [
       'https://pipedapi.kavin.rocks',
       'https://pipedapi.adminforge.de',
@@ -13,7 +13,7 @@ class NewPipeService {
     this.currentInstance = 0;
   }
 
-  // Get next available instance
+  // Get next available instance (rotation for anti-flagging)
   getNextInstance() {
     const instance = this.instances[this.currentInstance];
     this.currentInstance = (this.currentInstance + 1) % this.instances.length;
@@ -26,18 +26,14 @@ class NewPipeService {
       try {
         const instance = this.getNextInstance();
         console.log(`Searching NewPipe instance: ${instance}`);
-        
         const response = await axios.get(`${instance}/search`, {
-          params: {
-            q: query,
-            filter: 'videos'
-          },
+          params: { q: query, filter: 'videos' },
           timeout: 15000,
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'audio/*,*/*;q=0.9'
           }
         });
-
         if (response.data.items && response.data.items.length > 0) {
           return response.data.items.slice(0, maxResults).map(item => ({
             title: item.title,
@@ -51,7 +47,7 @@ class NewPipeService {
         }
       } catch (error) {
         console.error(`NewPipe instance ${this.getNextInstance()} failed:`, error.message);
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Delay to avoid rate limits
       }
     }
     return [];
@@ -63,22 +59,17 @@ class NewPipeService {
       try {
         const instance = this.getNextInstance();
         console.log(`Getting stream from NewPipe instance: ${instance}`);
-        
         const response = await axios.get(`${instance}/streams/${videoId}`, {
           timeout: 20000,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
           }
         });
-
         const data = response.data;
-        
-        // Get audio streams
         const audioStreams = data.audioStreams || [];
         if (audioStreams.length > 0) {
-          // Sort by quality (prefer higher bitrate)
+          // Sort by quality (higher bitrate first)
           const sortedStreams = audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-          
           return {
             title: data.title,
             duration: data.duration,
@@ -94,7 +85,6 @@ class NewPipeService {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
-    
     throw new Error('No working NewPipe instance found');
   }
 
@@ -110,7 +100,29 @@ class NewPipeService {
       const streamData = await this.getStreamUrls(videoId);
       return streamData.audioUrl ? streamData : null;
     } catch (error) {
+      console.error('Video validation error:', error);
       return null;
+    }
+  }
+
+  async createAudioStreamFromUrl(audioUrl) {
+    try {
+      const response = await axios({
+        method: 'GET',
+        url: audioUrl,
+        responseType: 'stream',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'audio/*,*/*;q=0.9',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive'
+        },
+        timeout: 30000
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to create audio stream: ${error.message}`);
     }
   }
 }
