@@ -2,42 +2,23 @@ const axios = require('axios');
 
 class NewPipeService {
   constructor() {
-    // Updated list of reliable Piped instances as of July 2025 (sourced from community lists)
+    // Curated list of verified, working Piped instances as of July 2025 (removed invalid/down ones)
     this.instances = [
       'https://pipedapi.kavin.rocks',
       'https://pipedapi.tokhmi.xyz',
       'https://pipedapi.moomoo.me',
       'https://pipedapi.syncpundit.io',
       'https://api-piped.mha.fi',
-      'https://piped-api.garudalinux.org',
       'https://pipedapi.rivo.lol',
       'https://pipedapi.leptons.xyz',
       'https://piped-api.lunar.icu',
-      'https://ytapi.dc09.ru',
       'https://pipedapi.colinslegacy.com',
       'https://yapi.vyper.me',
       'https://api.looleh.xyz',
-      'https://piped-api.cfe.re',
-      'https://pipedapi.r4fo.com',
       'https://pipedapi-libre.kavin.rocks',
       'https://pa.mint.lgbt',
       'https://pa.il.ax',
-      'https://pipedapi.qdi.fi',
-      'https://piped-api.hostux.net',
-      'https://pdapi.vern.cc',
-      'https://pipedapi.pfcd.me',
-      'https://pipedapi.frontendfriendly.xyz',
-      'https://api.piped.yt',
-      'https://pipedapi.drgns.space',
-      'https://piapi.ggtyler.dev',
-      'https://api.watch.pluto.lat',
-      'https://piped-backend.seitan-ayoub.lol',
-      'https://pipedapi.owo.si',
-      'https://pipedapi.12a.app',
-      'https://api.piped.minionflo.net',
-      'https://pipedapi.nezumi.party',
-      'https://pipedapi.ngn.tf',
-      'https://pipedapi.ducks.party'
+      'https://pipedapi.qdi.fi'
     ];
     this.currentInstance = 0;
   }

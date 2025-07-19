@@ -5,6 +5,7 @@ const express = require('express');
 const music = require('./commands/music');
 const playlist = require('./commands/playlist');
 const youtube = require('./commands/youtube');
+const musicPlayer = require('./utils/musicPlayer'); // Added missing import
 
 const client = new Client({
   intents: [
