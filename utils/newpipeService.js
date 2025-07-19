@@ -49,16 +49,26 @@ class NewPipeService {
     return instance;
   }
 
-  // Search for videos with retries
+  // Search for videos with retries and timeout
   async searchVideos(query, maxResults = 10) {
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Search timeout')), 30000));
+    try {
+      return await Promise.race([timeoutPromise, this.performSearch(query, maxResults)]);
+    } catch (error) {
+      console.error('Search timeout or error:', error);
+      return [];
+    }
+  }
+
+  async performSearch(query, maxResults) {
     for (let attempt = 0; attempt < this.instances.length; attempt++) {
       const instance = this.getNextInstance();
       console.log(`Searching NewPipe instance: ${instance}`);
-      for (let retry = 0; retry < 3; retry++) { // Retry up to 3 times per instance
+      for (let retry = 0; retry < 2; retry++) { // Reduced to 2 retries
         try {
           const response = await axios.get(`${instance}/search`, {
             params: { q: query, filter: 'videos' },
-            timeout: 15000,
+            timeout: 10000, // Reduced per-request timeout
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'Accept': 'audio/*,*/*;q=0.9'
@@ -77,23 +87,33 @@ class NewPipeService {
           }
         } catch (error) {
           console.error(`NewPipe instance ${instance} failed (retry ${retry + 1}):`, error.message);
-          if (error.response?.status === 403) break; // Skip if 403 (permanent block)
-          await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay between retries
+          if (error.response?.status === 403) break;
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced delay to 1s
         }
       }
     }
     return [];
   }
 
-  // Get stream URLs for a video with retries
+  // Get stream URLs for a video with retries and timeout
   async getStreamUrls(videoId) {
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Stream fetch timeout')), 30000));
+    try {
+      return await Promise.race([timeoutPromise, this.performGetStreams(videoId)]);
+    } catch (error) {
+      console.error('Stream fetch timeout or error:', error);
+      throw error;
+    }
+  }
+
+  async performGetStreams(videoId) {
     for (let attempt = 0; attempt < this.instances.length; attempt++) {
       const instance = this.getNextInstance();
       console.log(`Getting stream from NewPipe instance: ${instance}`);
-      for (let retry = 0; retry < 3; retry++) {
+      for (let retry = 0; retry < 2; retry++) {
         try {
           const response = await axios.get(`${instance}/streams/${videoId}`, {
-            timeout: 20000,
+            timeout: 15000,
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
@@ -101,7 +121,6 @@ class NewPipeService {
           const data = response.data;
           const audioStreams = data.audioStreams || [];
           if (audioStreams.length > 0) {
-            // Sort by quality (higher bitrate first)
             const sortedStreams = audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
             return {
               title: data.title,
@@ -116,7 +135,7 @@ class NewPipeService {
         } catch (error) {
           console.error(`NewPipe stream fetch failed (retry ${retry + 1}):`, error.message);
           if (error.response?.status === 403) break;
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
     }

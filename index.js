@@ -44,6 +44,11 @@ client.on('messageCreate', async message => {
     await music.skip(message);
   } else if (command === 'queue') {
     await music.showQueue(message);
+  } else if (command === 'leave') {
+    const serverQueue = musicPlayer.getQueue(message.guild.id);
+    if (!serverQueue) return message.reply('❌ The bot is not in a voice channel!');
+    musicPlayer.deleteQueue(message.guild.id);
+    message.reply('👋 Bot has left the voice channel!');
   } else if (command === 'create-playlist') {
     await playlist.createPlaylist(message, args);
   } else if (command === 'add-to-playlist') {
@@ -63,12 +68,11 @@ client.on('messageCreate', async message => {
   } else if (command === 'auth-code') {
     await youtube.handleAuthCode(message, args);
   } else if (command === 'help') {
-    // Centralized help command - only one response
     const embed = new EmbedBuilder()
       .setTitle('FTR Music Bot Commands')
       .setDescription('All commands start with ftm.')
       .addFields(
-        { name: 'Music Controls', value: 'ftm.play/p <name/URL> - Play song\nftm.pause - Pause\nftm.resume - Resume\nftm.stop - Stop\nftm.skip - Skip\nftm.queue - View queue' },
+        { name: 'Music Controls', value: 'ftm.play/p <name/URL> - Play song\nftm.pause - Pause\nftm.resume - Resume\nftm.stop - Stop\nftm.skip - Skip\nftm.queue - View queue\nftm.leave - Leave voice channel' },
         { name: 'Playlists', value: 'ftm.create-playlist <name> - Create\nftm.add-to-playlist <name> <song/URL> - Add song\nftm.remove-from-playlist <name> <index> - Remove\nftm.show-playlist <name> - Show\nftm.play-playlist <name> - Play\nftm.delete-playlist <name> - Delete' },
         { name: 'YouTube Import', value: 'ftm.auth-youtube - Authenticate\nftm.auth-code <code> - Submit code\nftm.import-youtube-playlist - Import (follow prompts)' }
       )

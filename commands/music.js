@@ -130,7 +130,8 @@ async function play(message, args) {
           guildId: message.guild.id,
           adapterCreator: message.guild.voiceAdapterCreator
         });
-        await entersState(connection, VoiceConnectionStatus.Ready, 30000);
+        await entersState(connection, VoiceConnectionStatus.Ready, 60000); // Increased timeout to 60s
+        console.log('Voice connection ready!'); // Log for Render debugging
         const player = createAudioPlayer();
         const queueConstruct = {
           textChannel: message.channel,
@@ -161,8 +162,7 @@ async function play(message, args) {
         await musicPlayer.playSong(message.guild, song);
       } catch (connectionError) {
         console.error('Connection Error:', connectionError);
-        message.channel.send('❌ Failed to join voice channel. Please check bot permissions and try again.');
-        return;
+        return message.channel.send('❌ Failed to join voice channel. Please check bot permissions and try again.');
       }
     } else {
       serverQueue.songs.push(song);
